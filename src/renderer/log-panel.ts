@@ -28,6 +28,7 @@ export class LogPanel {
     this.host.innerHTML = `
       <div class="logpanel" style="display:flex;flex-direction:column;height:100%;font-family:monospace;font-size:12px;">
         <div class="logpanel-toolbar" style="display:flex;align-items:center;gap:8px;padding:4px 8px;border-bottom:1px solid var(--border);background:var(--bg-toolbar);">
+          <span class="logpanel-title" style="font-weight:600;color:var(--fg);">Log</span>
           <label>Level
             <select data-act="filter" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);">
               <option value="all">all</option>

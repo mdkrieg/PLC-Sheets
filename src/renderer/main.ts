@@ -5,9 +5,10 @@
  * and wires open/save/find/undo/redo to the active WorkbookView.
  */
 
-import { w2layout, w2sidebar } from 'w2ui/w2ui-2.0.es6.min.js';
+import { w2layout } from 'w2ui/w2ui-2.0.es6.min.js';
 import 'w2ui/w2ui-2.0.min.css';
 import { TitleBar } from './titlebar';
+import { Sidebar } from './sidebar';
 import { WorkbookView } from './workbook-view';
 import { FindReplaceDialog } from './find-replace';
 import { SettingsView } from './settings-view';
@@ -29,11 +30,10 @@ root.appendChild(layoutEl);
 let activeView: WorkbookView | null = null;
 let connected = false;
 let writesEnabled = false;
+let sidebarVisible = true;
 
 const titleBar = new TitleBar(titleBarEl, {
-  onOpen: () => openWorkbook(),
-  onSave: () => saveWorkbook(false),
-  onSaveAs: () => saveWorkbook(true),
+  onToggleSidebar: () => toggleSidebar(),
   onConnect: () => toggleConnect(),
   onWrites: () => toggleWrites(),
   onAbout: () => aboutDialog.show(),
@@ -45,52 +45,32 @@ const aboutDialog = new AboutDialog();
 const layout = new w2layout({
   name: 'layout',
   panels: [
-    { type: 'left', size: 260, resizable: true, minSize: 180 },
+    { type: 'left', size: 280, resizable: true, minSize: 220 },
     { type: 'main', size: '70%' },
-    { type: 'bottom', size: 140, resizable: true, minSize: 60, title: 'Log' },
+    { type: 'bottom', size: 140, resizable: true, minSize: 60 },
   ],
 });
 layout.render('#layout-root');
 
-const sidebar = new w2sidebar({
-  name: 'sidebar',
-  nodes: [
-    {
-      id: 'settings', text: 'Configuration', icon: 'w2ui-icon-pencil', expanded: true, group: true,
-      nodes: [
-        { id: 'cfg-servers', text: 'Servers' },
-        { id: 'cfg-interfaces', text: 'Interface' },
-        { id: 'cfg-diagnostics', text: 'Diagnostics' },
-      ],
-    },
-    { id: 'workbook', text: 'No workbook open', icon: 'w2ui-icon-plus', expanded: true, group: true, nodes: [] as { id: string; text: string }[] },
-  ],
-  onClick: (event: { target: string }) => {
-    switch (event.target) {
-      case 'cfg-servers':
-        showSettings('servers');
-        break;
-      case 'cfg-interfaces':
-        showSettings('interfaces');
-        break;
-      case 'cfg-diagnostics':
-        showSettings('diagnostics');
-        break;
-      default:
-        if (event.target.startsWith('sheet-') && activeView) {
-          const sheetName = event.target.slice('sheet-'.length);
-          const idx = activeView.model.sheets.findIndex((s) => s.name === sheetName);
-          if (idx >= 0) {
-            // Switch back to workbook view if currently in settings.
-            showWorkbook();
-            activeView.activeSheetIndex = idx;
-            activeView.render();
-          }
-        }
-    }
+layout.html('left', '<div id="sidebar-host" style="width:100%;height:100%;"></div>');
+const sidebarHost = document.getElementById('sidebar-host')!;
+const sidebar = new Sidebar(sidebarHost, {
+  onNew: () => newWorkbook(),
+  onOpen: () => openWorkbook(),
+  onSave: () => saveWorkbook(false),
+  onSaveAs: () => saveWorkbook(true),
+  onSheetSelect: (name) => {
+    if (!activeView) return;
+    const idx = activeView.model.sheets.findIndex((s) => s.name === name);
+    if (idx < 0) return;
+    showWorkbook();
+    activeView.activeSheetIndex = idx;
+    activeView.render();
+    sidebar.setActiveSheet(name);
   },
+  onShowSettings: (tab) => showSettings(tab),
 });
-layout.html('left', sidebar);
+void sidebar.init();
 
 // w2layout.html() accepts strings or w2ui widgets — *not* DOM nodes (passing one
 // coerces to '[object HTMLDivElement]'). We inject a placeholder string then
@@ -112,7 +92,9 @@ const logPanel = new LogPanel(logHost);
 void logPanel.mount();
 
 const findDialog = new FindReplaceDialog(() => activeView);
-const settingsView = new SettingsView(mainHost);
+const settingsView = new SettingsView(mainHost, {
+  onConfigChanged: () => void sidebar.refreshConfig(),
+});
 let inSettings = false;
 
 window.addEventListener('keydown', (e) => {
@@ -126,6 +108,10 @@ window.addEventListener('keydown', (e) => {
     case 'o':
       e.preventDefault();
       openWorkbook();
+      break;
+    case 'n':
+      e.preventDefault();
+      newWorkbook();
       break;
     case 'f':
       e.preventDefault();
@@ -174,6 +160,34 @@ window.api.on('modbus:status', (payload) => {
 
 // `log:append` is consumed by LogPanel; nothing to do here.
 
+function toggleSidebar(): void {
+  sidebarVisible = !sidebarVisible;
+  if (sidebarVisible) {
+    layout.show('left', true);
+  } else {
+    layout.hide('left', true);
+  }
+}
+
+function newWorkbook(): void {
+  const model: WorkbookModel = {
+    filePath: null,
+    fileName: 'Untitled.xlsx',
+    modifiedAt: null,
+    sheets: [
+      {
+        name: 'Sheet1',
+        cells: {},
+        mergedRanges: [],
+        rowCount: 100,
+        columnCount: 26,
+      },
+    ],
+    legacyXls: false,
+  };
+  loadWorkbook(model);
+}
+
 async function openWorkbook(): Promise<void> {
   const dlg = await window.api.invoke('workbook:openDialog');
   if (!dlg) return;
@@ -193,11 +207,7 @@ function loadWorkbook(model: WorkbookModel): void {
   activeView = new WorkbookView(model, mainHost, (dirty) => titleBar.setDirty(dirty));
   activeView.render();
   titleBar.setFile(model.fileName + (model.legacyXls ? ' (legacy .xls — Save As .xlsx)' : ''), model.modifiedAt);
-
-  sidebar.set?.('workbook', {
-    text: model.fileName,
-    nodes: model.sheets.map((s) => ({ id: 'sheet-' + s.name, text: s.name })),
-  });
+  sidebar.setWorkbook(model, model.sheets[0]?.name ?? null);
 }
 
 async function saveWorkbook(forceDialog: boolean): Promise<void> {
@@ -218,8 +228,11 @@ async function saveWorkbook(forceDialog: boolean): Promise<void> {
     activeView.model.filePath = filePath;
     activeView.model.modifiedAt = result.modifiedAt;
     activeView.model.legacyXls = false;
+    const fileName = filePath.split(/[\\/]/).pop() ?? activeView.model.fileName;
+    activeView.model.fileName = fileName;
     activeView.setSaved();
     titleBar.setFile(activeView.model.fileName, result.modifiedAt);
+    sidebar.setWorkbook(activeView.model, activeView.model.sheets[activeView.activeSheetIndex]?.name ?? null);
   } catch (err) {
     console.error('[save] failed', err);
     alert('Failed to save workbook: ' + (err instanceof Error ? err.message : String(err)));
@@ -228,7 +241,7 @@ async function saveWorkbook(forceDialog: boolean): Promise<void> {
 
 // ---- Settings <-> Workbook view toggling ----
 
-async function showSettings(tab: 'servers' | 'interfaces' | 'diagnostics'): Promise<void> {
+async function showSettings(tab: 'servers' | 'diagnostics'): Promise<void> {
   // Tear down workbook view (the w2grid lives inside mainHost) so SettingsView
   // can fully take over the main panel.
   if (activeView && !inSettings) activeView.destroy();

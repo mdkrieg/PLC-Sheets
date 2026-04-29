@@ -1,14 +1,12 @@
 /**
- * Title bar: filename + modified date + Open/Save/Save As/Connect/Writes-Enabled/Theme.
+ * Title bar: hamburger (toggles sidebar) + filename + modified date +
+ * Connect/Writes-Enabled/Theme/About.
  *
- * Phase 2 wires Open/Save/Save-As callbacks. Connect & Writes-Enabled remain
- * stubbed until Phase 4.
+ * File actions (Open/Save/Save As/New) live in the sidebar's File section.
  */
 
 export interface TitleBarCallbacks {
-  onOpen: () => void;
-  onSave: () => void;
-  onSaveAs: () => void;
+  onToggleSidebar: () => void;
   onConnect: () => void;
   onWrites: () => void;
   onAbout: () => void;
@@ -39,10 +37,8 @@ export class TitleBar {
     const dirtyMark = dirty ? '<span class="modified" style="color:var(--danger)">●</span>' : '';
 
     this.host.innerHTML = `
+      <button class="hamburger" data-act="toggle-sidebar" title="Toggle sidebar" aria-label="Toggle sidebar">&#9776;</button>
       <div class="filename">${escape(fileName)} ${dirtyMark}${modified}</div>
-      <button class="w2ui-btn" data-act="open">Open</button>
-      <button class="w2ui-btn" data-act="save">Save</button>
-      <button class="w2ui-btn" data-act="save-as">Save As</button>
       <button class="w2ui-btn connect-btn ${connected ? 'connected' : ''}" data-act="connect">
         ${connected ? 'Disconnect' : 'Connect'}
       </button>
@@ -60,14 +56,8 @@ export class TitleBar {
 
   private handle(action: string): void {
     switch (action) {
-      case 'open':
-        this.callbacks.onOpen();
-        break;
-      case 'save':
-        this.callbacks.onSave();
-        break;
-      case 'save-as':
-        this.callbacks.onSaveAs();
+      case 'toggle-sidebar':
+        this.callbacks.onToggleSidebar();
         break;
       case 'connect':
         this.callbacks.onConnect();
