@@ -1,0 +1,176 @@
+/* Theme tokens. Switching .theme-dark <-> .theme-light on <body> swaps everything. */
+
+:root,
+body.theme-light {
+  --bg: #ffffff;
+  --bg-alt: #f3f3f3;
+  --bg-toolbar: #e4e4e4;
+  --fg: #1a1a1a;
+  --fg-muted: #555555;
+  --border: #b8b8b8;
+  --accent: #0a66c2;
+  --danger: #c0392b;
+  --success: #2e7d32;
+}
+
+body.theme-dark {
+  --bg: #1e1e1e;
+  --bg-alt: #252526;
+  --bg-toolbar: #2d2d30;
+  --fg: #e6e6e6;
+  --fg-muted: #b0b0b0;
+  --border: #3c3c3c;
+  --accent: #4ea1f3;
+  --danger: #f47174;
+  --success: #6fcf97;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-toolbar);
+  border-bottom: 1px solid var(--border);
+  height: 36px;
+  box-sizing: border-box;
+}
+
+.titlebar .filename {
+  font-weight: 600;
+  margin-right: auto;
+  color: var(--fg);
+}
+
+.titlebar .filename .modified {
+  font-weight: 400;
+  color: var(--fg-muted);
+  margin-left: 8px;
+}
+
+.titlebar .writes-toggle.armed {
+  background: var(--danger) !important;
+  color: white;
+}
+
+.titlebar .connect-btn.connected {
+  background: var(--success) !important;
+  color: white;
+}
+
+#layout-root {
+  width: 100%;
+  height: calc(100% - 36px);
+}
+
+/* === w2ui overrides ===
+ * w2ui v2 ships its own light palette; force text colors to follow our theme
+ * tokens so labels remain readable.
+ */
+
+.w2ui-sidebar,
+.w2ui-tabs,
+.w2ui-grid,
+.w2ui-panel {
+  color: var(--fg);
+}
+
+.w2ui-sidebar .w2ui-node-text,
+.w2ui-sidebar .w2ui-node-group,
+.w2ui-sidebar .w2ui-node {
+  color: var(--fg) !important;
+}
+
+.w2ui-tabs .w2ui-tab {
+  color: var(--fg) !important;
+}
+
+.w2ui-tabs .w2ui-tab.active {
+  color: var(--fg) !important;
+  font-weight: 600;
+}
+
+body.theme-dark .w2ui-grid,
+body.theme-dark .w2ui-panel,
+body.theme-dark .w2ui-toolbar,
+body.theme-dark .w2ui-sidebar,
+body.theme-dark .w2ui-tabs {
+  background: var(--bg-alt);
+}
+
+/* Sidebar nodes have their own row/hover/selection backgrounds we need to drown out. */
+body.theme-dark .w2ui-sidebar .w2ui-node,
+body.theme-dark .w2ui-sidebar .w2ui-node-group,
+body.theme-dark .w2ui-sidebar .w2ui-sidebar-div {
+  background: var(--bg-alt) !important;
+}
+
+body.theme-dark .w2ui-sidebar .w2ui-node:hover {
+  background: var(--bg-toolbar) !important;
+}
+
+body.theme-dark .w2ui-sidebar .w2ui-node.w2ui-selected {
+  background: #094771 !important;
+  color: #ffffff !important;
+}
+
+body.theme-dark .w2ui-grid .w2ui-grid-records,
+body.theme-dark .w2ui-grid .w2ui-grid-body,
+body.theme-dark .w2ui-grid .w2ui-grid-data {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+body.theme-dark .w2ui-grid .w2ui-grid-columns,
+body.theme-dark .w2ui-grid .w2ui-grid-header,
+body.theme-dark .w2ui-grid td.w2ui-col-number,
+body.theme-dark .w2ui-grid .w2ui-col-header {
+  background: var(--bg-toolbar) !important;
+  color: var(--fg) !important;
+  border-color: var(--border) !important;
+}
+
+/* === Phase 6: live cell states === */
+.cell-pending { color: var(--fg-muted); font-style: italic; }
+.cell-stale { color: var(--fg-muted); background: repeating-linear-gradient(45deg, transparent 0 4px, rgba(192,57,43,0.18) 4px 8px); padding: 0 2px; }
+.cell-error { color: var(--danger); font-weight: 600; }
+.cell-disabled { color: #b06000; }
+body.theme-dark .cell-disabled { color: #e8a04a; }
+.cell-live { animation: cell-flash 1.4s ease-out; }
+@keyframes cell-flash { 0% { background: rgba(46,125,50,0.35); } 100% { background: transparent; } }
+body.theme-dark .cell-live { animation-name: cell-flash-dark; }
+@keyframes cell-flash-dark { 0% { background: rgba(111,207,151,0.30); } 100% { background: transparent; } }
+
+/* === Phase 6: log panel === */
+.log-row { white-space: pre-wrap; word-break: break-word; }
+.log-row + .log-row { border-top: 1px dotted transparent; }
+.log-level { display: inline-block; min-width: 48px; font-weight: 600; }
+.log-level-info { color: var(--accent); }
+.log-level-warn { color: #b06000; }
+body.theme-dark .log-level-warn { color: #e8a04a; }
+.log-level-error { color: var(--danger); }
+.log-row.log-error { background: rgba(192,57,43,0.10); }
+.log-row.log-warn { background: rgba(176,96,0,0.08); }
+.log-msg { white-space: pre-wrap; }
+
+
+/* === Phase 7: About dialog === */
+.about-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 9999; display: flex; align-items: center; justify-content: center; }
+.about-card { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 20px 24px; width: 560px; max-width: 90vw; max-height: 86vh; overflow: auto; box-shadow: 0 12px 40px rgba(0,0,0,0.4); }
+a.about-link { color: var(--accent); text-decoration: none; }
+a.about-link:hover { text-decoration: underline; }
+

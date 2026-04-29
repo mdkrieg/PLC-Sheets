@@ -1,0 +1,18 @@
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+PLC-Sheets is licensed under the GNU General Public License v3.0.
+
+The full text of the GPL-3.0 license is available at:
+    https://www.gnu.org/licenses/gpl-3.0.html
+
+PLC-Sheets links against HyperFormula, which is itself distributed under
+GPL-3.0 (community license). To distribute PLC-Sheets under any other
+license, a commercial HyperFormula key is required from Handsontable
+(https://hyperformula.handsontable.com/).
+
+Third-party components retain their original licenses; see NOTICE.md.

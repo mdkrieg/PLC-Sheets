@@ -36,18 +36,15 @@ NOTE: I've used the xlsx package before and IMO it was extremely robust
   * Zero-based/one-based addressing
   * any other relevant configuration supported by the driver
 
-Servers can be mux'd together in a redundant pair or used individually
-* A redundant server has the same downstream interface as a single server - referred to by its arbitrary name
-* A redundant server takes a reference to an A and a B server from the previous configuration
-* The failover action has a few different options:
+### Interface Settings
+The "interface" sits between the server(s) and the user space. There is exactly **one** interface configured at any time — it is the implicit target of every MODBUS_* formula (no per-formula source argument). The interface owns its own redundancy configuration: pick a single server (no redundancy) or a primary + secondary server pair plus a failover policy. The interface mimics as many different configurations of an industrial DCS as possible, including but not limited to:
+* Primary server (required) - chosen from the configured Servers
+* Secondary server (optional) - when set, the interface operates as a redundant pair (primary = "A", secondary = "B"). The pair is referred to by the interface's name.
+* Failover policy (only when a secondary is set):
   * Manual selection (via button quickly and easily accessible when using the app)
   * Periodic swap
   * Primary/Standby w/ heartbeat address (if configured address value doesn't change for n seconds failover to standby). Heartbeat can be an incrementing register or a flip flop coil
   * Warn on read mismatch after n seconds
-
-### Interface Settings
-The "interface" sits between the server/redundant server and the user space. This mimics as many different configurations of an industrial DCS as possible, including but not limited to:
-* Source - the server name or redundant server name to use as the connection (via dropdown)
 * Heartbeat write (writes incrementing register or flip flop coil every n seconds)
 * Setting for 0-15 or 1-16 bit nomenclature as well as 15-0 or 16-1 for reverse (15/16 = LSB)
 * settings for byteswap and wordswap (for 32 bit types)
@@ -79,10 +76,16 @@ All configuration settings are saved to a JSON file for retention and can be exp
 
 ## Modbus Usage
 We simply shim in some pseudo-functions in the form of:
-=MODBUS_READ_REGISTER(server_name, address, datatype["int16"|"uint16"|"int32"|"uint32"|"float32"|"ascii"], poll_rate in integer seconds (0 for as fast as possible, -1 for base rate))
-=MODBUS_READ_COIL(server_name, address, bit_number (-1 to discern from address), poll_rate in integer seconds (0 for as fast as possible, -1 for base rate))
+=MODBUS_READ_REGISTER(address, datatype["int16"|"uint16"|"int32"|"uint32"|"float32"|"ascii"], poll_rate in integer seconds (0 for as fast as possible, -1 for base rate))
+=MODBUS_READ_COIL(address, bit_number (-1 to discern from address), poll_rate in integer seconds (0 for as fast as possible, -1 for base rate))
 =MODBUS_WRITE_REGISTER(reference[cell], ...same from MODBUS_READ_REGISTER function, optional readback address (uses same as inline if omitted))
 =MODBUS_WRITE_COIL(reference[cell], ...same from MODBUS_READ_COIL function, optional readback address (uses same as inline if omitted))
+
+NOTES on arguments:
+* All MODBUS_* formulas implicitly target the single configured interface (see Interface Settings). There is no per-formula source/server argument.
+* `datatype` and `poll_rate` are optional. When omitted they default to `"int16"` and `-1` (base poll rate) respectively.
+* `datatype` is **only** valid for MODBUS_READ_REGISTER / MODBUS_WRITE_REGISTER. The COIL functions never take a datatype argument.
+* The formula bar provides inline autocomplete for these function names plus a parameter hint while typing.
 
 NOTE: the WRITE functions' readback will obey the "read polling" configuration and contribute to its blocking scheme. If set to no readback with -1 will just display SUCCESS or FAILURE of the write. the SUCCESS/FAIlURE state will also style the cell green or red regardless of if readback is on or off.
 
