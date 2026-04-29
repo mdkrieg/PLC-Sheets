@@ -246,25 +246,37 @@ export function createFormulaHost(model: WorkbookModel): FormulaHost {
     sheetsData[s.name] = sheetCellsToGrid(s.cells, s.rowCount, s.columnCount);
   }
 
-  // Translate workbook-scoped named ranges into HF's SerializedNamedExpression
-  // form. They MUST be supplied at build time (not added afterwards) because
-  // HF resolves identifiers during initial parse; otherwise every formula
-  // that references a name evaluates to #NAME? and HF logs a warning.
-  const namedExpressions: { name: string; expression: string }[] = [];
-  if (model.namedRanges && model.namedRanges.length) {
-    for (const nr of model.namedRanges) {
-      const expr = nr.expression?.trim();
-      if (!nr.name || !expr) continue;
-      // HF expects a formula-form expression (with leading '='). Range refs
-      // like `Sheet1!$A$1:$B$2` are valid formulas in HF.
-      namedExpressions.push({ name: nr.name, expression: expr.startsWith('=') ? expr : '=' + expr });
-    }
-  }
-
   const hf = HyperFormula.buildFromSheets(sheetsData as never, {
     licenseKey: HF_LICENSE_KEY,
     smartRounding: true,
-  }, namedExpressions as never);
+  });
+
+  // Register workbook-scoped named ranges (Excel "defined names") AFTER build.
+  // Building with `namedExpressions` argument throws synchronously when any
+  // single name fails to resolve (e.g. references a deleted sheet, an array,
+  // or has a syntax HF doesn't accept), aborting the entire workbook open.
+  // Adding them one at a time lets us skip the offenders and still resolve
+  // the rest, so formulas like `=PumpSetpoint` evaluate instead of #NAME?.
+  if (model.namedRanges && model.namedRanges.length) {
+    const hfAny = hf as unknown as {
+      addNamedExpression: (name: string, expression: string) => unknown;
+    };
+    for (const nr of model.namedRanges) {
+      const expr = nr.expression?.trim();
+      if (!nr.name || !expr) continue;
+      const exprFormula = expr.startsWith('=') ? expr : '=' + expr;
+      try {
+        hfAny.addNamedExpression(nr.name, exprFormula);
+      } catch (err) {
+        appLog(
+          'warn',
+          'formula',
+          `named range "${nr.name}" = ${exprFormula} could not be registered: ${(err as Error)?.message ?? err}`,
+          `nr-skip-${nr.name}`,
+        );
+      }
+    }
+  }
 
   // Mark cells with disallowed formulas as errored. They were inserted into HF
   // as their raw text (so HF will treat them as strings, not formulas) — but
