@@ -42,6 +42,19 @@ export interface WorkbookModel {
   sheets: SheetModel[];
   /** Whether the file is .xls legacy (saved as .xlsx going forward) */
   legacyXls: boolean;
+  /**
+   * Workbook-scoped named ranges (Excel "defined names"). Each entry maps
+   * a name to a single A1 expression like "Sheet1!$A$1:$B$2". Names with
+   * multiple ranges keep only the first; pure-formula names are passed
+   * through verbatim so HyperFormula can attempt to parse them.
+   */
+  namedRanges?: NamedRange[];
+}
+
+export interface NamedRange {
+  name: string;
+  /** Raw expression without leading '=' (e.g. "Sheet1!$A$1:$B$2" or "10*Sheet1!$A$1") */
+  expression: string;
 }
 
 export type AddressKind = 'holding' | 'input' | 'discrete' | 'coil';

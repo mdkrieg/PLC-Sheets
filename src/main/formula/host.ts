@@ -246,10 +246,25 @@ export function createFormulaHost(model: WorkbookModel): FormulaHost {
     sheetsData[s.name] = sheetCellsToGrid(s.cells, s.rowCount, s.columnCount);
   }
 
+  // Translate workbook-scoped named ranges into HF's SerializedNamedExpression
+  // form. They MUST be supplied at build time (not added afterwards) because
+  // HF resolves identifiers during initial parse; otherwise every formula
+  // that references a name evaluates to #NAME? and HF logs a warning.
+  const namedExpressions: { name: string; expression: string }[] = [];
+  if (model.namedRanges && model.namedRanges.length) {
+    for (const nr of model.namedRanges) {
+      const expr = nr.expression?.trim();
+      if (!nr.name || !expr) continue;
+      // HF expects a formula-form expression (with leading '='). Range refs
+      // like `Sheet1!$A$1:$B$2` are valid formulas in HF.
+      namedExpressions.push({ name: nr.name, expression: expr.startsWith('=') ? expr : '=' + expr });
+    }
+  }
+
   const hf = HyperFormula.buildFromSheets(sheetsData as never, {
     licenseKey: HF_LICENSE_KEY,
     smartRounding: true,
-  });
+  }, namedExpressions as never);
 
   // Mark cells with disallowed formulas as errored. They were inserted into HF
   // as their raw text (so HF will treat them as strings, not formulas) — but

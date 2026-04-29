@@ -135,7 +135,25 @@ function exceljsToModel(
 
   if (opts.csv && sheets.length === 1) sheets[0]!.name = 'contents';
 
-  return { filePath, fileName, modifiedAt, sheets, legacyXls: false };
+  // Workbook-scoped defined names (named ranges). These round-trip via the
+  // cached exceljs.Workbook automatically; we expose them on the model so
+  // the HyperFormula host can register them as named expressions, otherwise
+  // every formula that references one logs "Named expression ... not
+  // recognized." and evaluates to #NAME?.
+  const namedRanges: { name: string; expression: string }[] = [];
+  const dn = (wb as unknown as { definedNames?: { model?: { name: string; ranges: string[] }[] } }).definedNames;
+  const dnModel = dn?.model;
+  if (Array.isArray(dnModel)) {
+    for (const entry of dnModel) {
+      if (!entry || !entry.name || !Array.isArray(entry.ranges) || entry.ranges.length === 0) continue;
+      // HF supports a single expression per name; if multiple ranges are
+      // declared we keep the first and ignore the rest.
+      const expr = String(entry.ranges[0]).replace(/^=+/, '');
+      namedRanges.push({ name: entry.name, expression: expr });
+    }
+  }
+
+  return { filePath, fileName, modifiedAt, sheets, legacyXls: false, namedRanges };
 }
 
 function extractCellValue(cell: ExcelJS.Cell): SheetCellValue {
