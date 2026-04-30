@@ -16,7 +16,21 @@ import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import type { CellModel, SheetCellValue, SheetModel, WorkbookModel } from '../../shared/types';
+import type {
+  AlignmentStyle,
+  BorderEdge,
+  BorderEdgeStyle,
+  BorderStyle,
+  CellModel,
+  CellStyle,
+  FillStyle,
+  FontStyle,
+  HorizontalAlign,
+  SheetCellValue,
+  SheetModel,
+  VerticalAlign,
+  WorkbookModel,
+} from '../../shared/types';
 import { columnIndexToLetter, formatA1 } from '../../shared/a1';
 
 /** Cache of the live exceljs.Workbook for each opened file so that round-tripping preserves unknown parts. */
@@ -110,6 +124,8 @@ function exceljsToModel(
         if (cell.result !== undefined && cell.result !== null) cm.cached = cell.result as SheetCellValue;
         const note = (cell as unknown as { note?: { texts?: { text: string }[] } | string }).note;
         if (note) cm.comment = typeof note === 'string' ? note : (note.texts?.map((t) => t.text).join('') ?? '');
+        const style = extractCellStyle(cell);
+        if (style) cm.style = style;
         cells[address] = cm;
       });
     });
@@ -123,6 +139,8 @@ function exceljsToModel(
       }
     }
 
+    const { columnWidths, rowHeights } = extractSheetDimensions(ws);
+
     sheets.push({
       name: ws.name,
       cells,
@@ -130,6 +148,8 @@ function exceljsToModel(
       conditionalFormats: (ws as unknown as { conditionalFormattings?: unknown[] }).conditionalFormattings ?? [],
       rowCount: Math.max(maxRow, ws.rowCount, 50),
       columnCount: Math.max(maxCol, ws.columnCount, 26),
+      ...(columnWidths ? { columnWidths } : {}),
+      ...(rowHeights ? { rowHeights } : {}),
     });
   });
 
@@ -256,3 +276,152 @@ function sheetjsToModel(wb: XLSX.WorkBook, filePath: string, fileName: string, m
 
 // Re-export so the renderer can compute column letters for any width.
 export { columnIndexToLetter };
+
+// --- style extraction (read-only) -----------------------------------------
+//
+// Maps the ExcelJS cell.style + worksheet column/row metrics to our flat
+// CellStyle / SheetModel.columnWidths / SheetModel.rowHeights shapes. Values
+// that match Excel defaults are omitted to keep payloads small. Themed and
+// indexed colors are skipped (TODO: resolve via theme1.xml); gradient and
+// patterned fills are also skipped — only solid fills are extracted.
+
+/** Extract a structured CellStyle from an exceljs Cell, or null when default. */
+function extractCellStyle(cell: ExcelJS.Cell): CellStyle | null {
+  const out: CellStyle = {};
+
+  // Number format. ExcelJS resolves built-in ids to format codes for us.
+  // 'General' is Excel's default; treat as no override.
+  const numFmt = (cell as unknown as { numFmt?: string }).numFmt;
+  if (numFmt && numFmt !== 'General') out.numFmt = numFmt;
+
+  const font = extractFontStyle(cell.font as unknown as ExcelJsFont | undefined);
+  if (font) out.font = font;
+
+  const fill = extractFillStyle(cell.fill as unknown as ExcelJsFill | undefined);
+  if (fill) out.fill = fill;
+
+  const alignment = extractAlignmentStyle(cell.alignment as unknown as ExcelJsAlignment | undefined);
+  if (alignment) out.alignment = alignment;
+
+  const border = extractBorderStyle(cell.border as unknown as ExcelJsBorder | undefined);
+  if (border) out.border = border;
+
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+interface ExcelJsColor { argb?: string; theme?: number; tint?: number; indexed?: number; }
+interface ExcelJsFont {
+  name?: string; size?: number; bold?: boolean; italic?: boolean;
+  underline?: boolean | string; strike?: boolean; color?: ExcelJsColor;
+}
+interface ExcelJsFill {
+  type?: 'pattern' | 'gradient'; pattern?: string;
+  fgColor?: ExcelJsColor; bgColor?: ExcelJsColor;
+}
+interface ExcelJsAlignment {
+  horizontal?: string; vertical?: string; wrapText?: boolean; indent?: number;
+}
+interface ExcelJsBorderEdge { style?: string; color?: ExcelJsColor; }
+interface ExcelJsBorder {
+  top?: ExcelJsBorderEdge; right?: ExcelJsBorderEdge;
+  bottom?: ExcelJsBorderEdge; left?: ExcelJsBorderEdge;
+}
+
+function extractFontStyle(font: ExcelJsFont | undefined): FontStyle | null {
+  if (!font) return null;
+  const out: FontStyle = {};
+  if (font.name) out.name = font.name;
+  if (typeof font.size === 'number') out.size = font.size;
+  if (font.bold) out.bold = true;
+  if (font.italic) out.italic = true;
+  // exceljs encodes underline as boolean OR style string ('single','double',...);
+  // we collapse all truthy values to a plain underline.
+  if (font.underline) out.underline = true;
+  if (font.strike) out.strike = true;
+  const color = resolveColor(font.color);
+  if (color) out.color = color;
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function extractFillStyle(fill: ExcelJsFill | undefined): FillStyle | null {
+  if (!fill || fill.type !== 'pattern' || fill.pattern !== 'solid') return null;
+  const color = resolveColor(fill.fgColor);
+  if (!color) return null;
+  return { color };
+}
+
+function extractAlignmentStyle(a: ExcelJsAlignment | undefined): AlignmentStyle | null {
+  if (!a) return null;
+  const out: AlignmentStyle = {};
+  if (a.horizontal) out.horizontal = a.horizontal as HorizontalAlign;
+  if (a.vertical) out.vertical = a.vertical as VerticalAlign;
+  if (a.wrapText) out.wrapText = true;
+  if (typeof a.indent === 'number' && a.indent > 0) out.indent = a.indent;
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function extractBorderStyle(b: ExcelJsBorder | undefined): BorderStyle | null {
+  if (!b) return null;
+  const out: BorderStyle = {};
+  const sides: (keyof BorderStyle)[] = ['top', 'right', 'bottom', 'left'];
+  for (const side of sides) {
+    const edge = extractBorderEdge(b[side]);
+    if (edge) out[side] = edge;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function extractBorderEdge(e: ExcelJsBorderEdge | undefined): BorderEdge | null {
+  if (!e || !e.style) return null;
+  const edge: BorderEdge = { style: e.style as BorderEdgeStyle };
+  const color = resolveColor(e.color);
+  if (color) edge.color = color;
+  return edge;
+}
+
+/** Resolve an ExcelJS color to "#RRGGBB", or null if unresolvable / default.
+ *  Themed and indexed colors are dropped for now (no theme palette). */
+function resolveColor(c: ExcelJsColor | undefined): string | undefined {
+  if (!c) return undefined;
+  if (typeof c.argb === 'string' && /^[0-9A-Fa-f]{8}$/.test(c.argb)) {
+    // ARGB → strip alpha.
+    return '#' + c.argb.slice(2).toUpperCase();
+  }
+  // Themed / indexed → defer until theme XML resolution is implemented.
+  return undefined;
+}
+
+/** Pull per-column widths and per-row heights from an ExcelJS worksheet.
+ *  Excel column widths are in "character units" (~MDW pixels); we approximate
+ *  with `width * 7 + 5`. Row heights are in points (1pt = 1/72in = 1.333px). */
+function extractSheetDimensions(ws: ExcelJS.Worksheet): {
+  columnWidths?: Record<number, number>;
+  rowHeights?: Record<number, number>;
+} {
+  const columnWidths: Record<number, number> = {};
+  const cols = (ws as unknown as { columns?: { width?: number }[] }).columns;
+  if (Array.isArray(cols)) {
+    for (let i = 0; i < cols.length; i++) {
+      const w = cols[i]?.width;
+      if (typeof w === 'number' && w > 0) {
+        // Clamp to avoid pathological values.
+        const px = Math.round(Math.max(20, Math.min(600, w * 7 + 5)));
+        columnWidths[i + 1] = px;
+      }
+    }
+  }
+
+  const rowHeights: Record<number, number> = {};
+  ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    const h = (row as unknown as { height?: number }).height;
+    if (typeof h === 'number' && h > 0) {
+      const px = Math.round(Math.max(8, Math.min(400, h * (4 / 3))));
+      rowHeights[rowNumber] = px;
+    }
+  });
+
+  return {
+    columnWidths: Object.keys(columnWidths).length > 0 ? columnWidths : undefined,
+    rowHeights: Object.keys(rowHeights).length > 0 ? rowHeights : undefined,
+  };
+}

@@ -170,6 +170,29 @@ body.theme-dark .cell-disabled { color: #e8a04a; }
 body.theme-dark .cell-live { animation-name: cell-flash-dark; }
 @keyframes cell-flash-dark { 0% { background: rgba(111,207,151,0.30); } 100% { background: transparent; } }
 
+/* === Read-only workbook formatting wrapper ===
+ * The .cell-fmt span wraps every rendered cell and carries inline styles
+ * extracted from the source xlsx (font, fill, alignment, borders).
+ * State classes (.cell-error etc.) coexist on the same element and override
+ * formatting-supplied colors so error/pending/stale states stay legible.
+ */
+.cell-fmt {
+  /* Default: behave like the surrounding td so unstyled cells look unchanged. */
+  display: inline;
+}
+/* When a state class is also present, force foreground/background to the
+ * state's intent rather than the workbook formatting. We keep the workbook
+ * font weight/style/borders so layout doesn't shift. */
+.cell-fmt.cell-error { color: var(--danger) !important; background: transparent !important; }
+.cell-fmt.cell-pending { color: var(--fg-muted) !important; background: transparent !important; }
+.cell-fmt.cell-disabled { color: #b06000 !important; background: transparent !important; }
+body.theme-dark .cell-fmt.cell-disabled { color: #e8a04a !important; }
+/* cell-stale keeps its diagonal-stripe background so the workbook fill is
+ * intentionally hidden — the stale signal must dominate. */
+.cell-fmt.cell-stale { color: var(--fg-muted) !important; }
+/* cell-live keeps the flash animation; any workbook background shows through
+ * once the animation finishes. */
+
 /* === Phase 6: log panel === */
 .log-row { white-space: pre-wrap; word-break: break-word; }
 .log-row + .log-row { border-top: 1px dotted transparent; }

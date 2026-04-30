@@ -13,7 +13,18 @@
  */
 
 import { w2grid, w2tabs } from 'w2ui/w2ui-2.0.es6.min.js';
-import type { CellModel, SheetCellValue, SheetModel, WorkbookModel } from '@shared/types';
+import * as XLSX from 'xlsx';
+import type {
+  AlignmentStyle,
+  BorderEdge,
+  BorderStyle,
+  CellModel,
+  CellStyle,
+  FontStyle,
+  SheetCellValue,
+  SheetModel,
+  WorkbookModel,
+} from '@shared/types';
 import { columnIndexToLetter, formatA1, parseA1 } from '@shared/a1';
 import { UndoStack, type Command } from './undo';
 import { attachFormulaAutocomplete } from './formula-autocomplete';
@@ -38,6 +49,16 @@ export class WorkbookView {
   private recalcPaused = false;
   /** Map of `${sheet}!${address}` -> ms-since-epoch of last value update. */
   private lastUpdatedAt = new Map<string, number>();
+  /** Set of A1 addresses (for the active sheet) that are inside a merged range
+   *  but are NOT the top-left origin. They render empty so the origin's text
+   *  can visually overflow into them. Rebuilt on every renderGrid(). */
+  private mergedCovered = new Set<string>();
+  /** Set of A1 addresses (for the active sheet) that ARE the top-left of a
+   *  merge — used so we can flag them for overflow-friendly rendering. */
+  private mergedOrigins = new Set<string>();
+  /** <style> element holding per-row-height + per-merge-origin rules for the
+   *  active grid; rebuilt on every renderGrid() and removed on destroy(). */
+  private dynStyleEl: HTMLStyleElement | null = null;
   /** Excel-style reference picker state. Active while Alt is held during
    *  formula editing. Arrow keys move pickFocus; Shift+arrow holds the
    *  anchor so a range is built up. The picked address (single cell or
@@ -68,6 +89,8 @@ export class WorkbookView {
     if (this.docKeyUpHandler) document.removeEventListener('keyup', this.docKeyUpHandler, true);
     this.docKeyDownHandler = null;
     this.docKeyUpHandler = null;
+    this.dynStyleEl?.remove();
+    this.dynStyleEl = null;
     this.grid?.destroy?.();
     this.tabs?.destroy?.();
     this.hostMain.innerHTML = '';
@@ -142,14 +165,37 @@ export class WorkbookView {
     const colCount = Math.max(sheet.columnCount, 26);
     const rowCount = Math.max(sheet.rowCount, 50);
 
+    // Rebuild merged-coverage caches for this sheet so formatCellDisplay
+    // can suppress text in covered cells and let the origin overflow.
+    this.mergedCovered = new Set<string>();
+    this.mergedOrigins = new Set<string>();
+    for (const range of sheet.mergedRanges) {
+      const m = /^([A-Z]+\d+):([A-Z]+\d+)$/.exec(range);
+      if (!m) continue;
+      const a = parseA1(m[1]!);
+      const b = parseA1(m[2]!);
+      const r1 = Math.min(a.row, b.row), r2 = Math.max(a.row, b.row);
+      const c1 = Math.min(a.column, b.column), c2 = Math.max(a.column, b.column);
+      this.mergedOrigins.add(formatA1(c1, r1));
+      for (let r = r1; r <= r2; r++) {
+        for (let c = c1; c <= c2; c++) {
+          if (r === r1 && c === c1) continue;
+          this.mergedCovered.add(formatA1(c, r));
+        }
+      }
+    }
+
+    const gridName = 'grid-' + Math.random().toString(36).slice(2, 8);
+
     const columns = [];
     for (let c = 1; c <= colCount; c++) {
       const letter = columnIndexToLetter(c);
       const field = CELL_FIELD_PREFIX + letter;
+      const widthPx = sheet.columnWidths?.[c];
       columns.push({
         field,
         text: `<div style="text-align:center">${letter}</div>`,
-        size: '90px',
+        size: typeof widthPx === 'number' ? `${widthPx}px` : '90px',
         resizable: true,
         editable: { type: 'text' },
         // Raw edit value is stored in record[field] (formula source like
@@ -160,10 +206,13 @@ export class WorkbookView {
           const sm = this.model.sheets[this.activeSheetIndex];
           if (!sm) return '';
           const address = formatA1(c, record.recid);
+          // Cells covered by a merge (but not the origin) render empty so
+          // the origin's content can overflow visually.
+          if (this.mergedCovered.has(address)) return '';
           const cellModel = sm.cells[address];
           if (!cellModel) return '';
           const last = this.lastUpdatedAt.get(`${sm.name}!${address}`);
-          return formatCellDisplay(cellModel, last);
+          return formatCellDisplay(cellModel, last, this.mergedOrigins.has(address));
         },
       });
     }
@@ -183,7 +232,7 @@ export class WorkbookView {
     }
 
     this.grid = new w2grid({
-      name: 'grid-' + Math.random().toString(36).slice(2, 8),
+      name: gridName,
       box: gridHost,
       selectType: 'cell',
       show: { lineNumbers: true, columnHeaders: true },
@@ -255,6 +304,7 @@ export class WorkbookView {
       },
     });
     this.grid.render();
+    this.applyDynamicSheetStyles(gridName, sheet);
   }
 
   private syncFormulaBarFromSelection(): void {
@@ -677,6 +727,43 @@ export class WorkbookView {
     this.grid.refresh?.();
   }
 
+  /** Inject a per-grid <style> block carrying row-height rules and the
+   *  overflow tweaks that let merged-origin cells visually span their range.
+   *  w2ui v2 doesn't expose stable per-row height APIs, so a stylesheet
+   *  scoped by grid name is the most reliable approach across versions. */
+  private applyDynamicSheetStyles(gridName: string, sheet: SheetModel): void {
+    if (!this.dynStyleEl) {
+      this.dynStyleEl = document.createElement('style');
+      this.dynStyleEl.dataset.plcsheetsDyn = '1';
+      document.head.appendChild(this.dynStyleEl);
+    }
+    const id = `#grid_${gridName}`;
+    const lines: string[] = [];
+
+    // Per-row heights.
+    if (sheet.rowHeights) {
+      for (const [rowStr, h] of Object.entries(sheet.rowHeights)) {
+        const r = Number(rowStr);
+        if (!Number.isFinite(r) || !Number.isFinite(h)) continue;
+        // w2ui v2 records are <tr recid="N">; the height needs to apply to
+        // the inner <td>s. !important wins over w2ui's row class default.
+        lines.push(
+          `${id} .w2ui-grid-records tr[recid="${r}"] td { height: ${h}px !important; }`,
+        );
+      }
+    }
+
+    // Allow merged-origin cells to overflow into the (empty) covered cells
+    // to their right/below. This is a visual approximation; selection still
+    // treats every cell independently.
+    if (this.mergedOrigins.size > 0) {
+      lines.push(
+        `${id} .w2ui-grid-records td.plc-merge-origin .w2ui-grid-data-content { overflow: visible !important; white-space: nowrap !important; }`,
+      );
+    }
+    this.dynStyleEl.textContent = lines.join('\n');
+  }
+
   private markDirty(): void {
     if (!this.dirty) {
       this.dirty = true;
@@ -704,43 +791,212 @@ function cellEditValue(cell: CellModel): string {
   return String(cell.value);
 }
 
-/** Convert a cell to the string we display in the grid (formula source as `=...`, otherwise value). */
-function formatCellDisplay(cell: CellModel, lastUpdated?: number): string {
-  // Errored formulas (DDE/external/macro) are flagged at parse time.
+/** Convert a cell to the visible HTML in the grid, honoring read-only
+ *  formatting (numFmt, font, fill, alignment, borders) extracted from the
+ *  source workbook. State sentinels (#NAME?, PENDING, #STALE, ...) take
+ *  precedence over numFmt but still render inside the formatting wrapper so
+ *  fonts/alignment/borders remain consistent. */
+function formatCellDisplay(cell: CellModel, lastUpdated: number | undefined, isMergedOrigin: boolean): string {
+  // Resolve display text + state class first.
+  let displayText: string;
+  let stateClass: string | null = null;
+  let stateTitle: string | null = null;
+
   if (cell.errored) {
-    return wrap('#NAME?', 'cell-error', describeCell(cell, lastUpdated, 'Formula could not be evaluated'));
+    displayText = '#NAME?';
+    stateClass = 'cell-error';
+    stateTitle = 'Formula could not be evaluated';
+  } else {
+    const rawDisplay = cell.cached !== undefined && cell.cached !== null
+      ? cell.cached
+      : cell.value;
+
+    if (rawDisplay === 'PENDING') {
+      displayText = 'PENDING';
+      stateClass = 'cell-pending';
+      stateTitle = 'Waiting for first poll';
+    } else if (rawDisplay === '#STALE') {
+      displayText = '#STALE';
+      stateClass = 'cell-stale';
+      stateTitle = 'Cache marked stale (read failure)';
+    } else if (rawDisplay === 'WRITES-DISABLED') {
+      displayText = 'WRITES-DISABLED';
+      stateClass = 'cell-disabled';
+      stateTitle = 'Writes-Enabled toggle is off';
+    } else if (typeof rawDisplay === 'string' && (rawDisplay === '#NAME?' || rawDisplay.startsWith('#'))) {
+      displayText = rawDisplay;
+      stateClass = 'cell-error';
+      stateTitle = 'Evaluator error';
+    } else if (rawDisplay === null || rawDisplay === undefined) {
+      displayText = '';
+    } else {
+      // Apply the workbook's number format if present and the value is numeric
+      // (or a Date-as-ISO string). When formatting fails, fall back to raw.
+      displayText = applyNumFmt(rawDisplay, cell.style?.numFmt);
+      // Live MODBUS_* readings get a subtle "fresh" tint via cell-live class.
+      if (cell.formula && /\bMODBUS_/i.test(cell.formula)) stateClass = 'cell-live';
+    }
   }
 
-  // Anything cached is the result of HF evaluation. Modbus plugins return
-  // sentinel strings for non-OK states; stage them visually so the user sees
-  // freshness at a glance instead of having to read the text.
-  const display = cell.cached !== undefined && cell.cached !== null
-    ? String(cell.cached)
-    : cell.value === null || cell.value === undefined
-      ? ''
-      : String(cell.value);
-
-  if (display === 'PENDING') return wrap(display, 'cell-pending', describeCell(cell, lastUpdated, 'Waiting for first poll'));
-  if (display === '#STALE') return wrap(display, 'cell-stale', describeCell(cell, lastUpdated, 'Cache marked stale (read failure)'));
-  if (display === 'WRITES-DISABLED') return wrap(display, 'cell-disabled', describeCell(cell, lastUpdated, 'Writes-Enabled toggle is off'));
-  if (display === '#NAME?' || display.startsWith('#')) {
-    return wrap(display, 'cell-error', describeCell(cell, lastUpdated, 'Evaluator error'));
-  }
-
-  // Live MODBUS_* readings get a subtle "fresh" tint that fades back to plain
-  // after a short window — gives the user a visual heartbeat without being
-  // obnoxious. The fade is purely CSS (animation), so we just stamp the class.
-  if (cell.formula && /\bMODBUS_/i.test(cell.formula)) {
-    return wrap(display, 'cell-live', describeCell(cell, lastUpdated, null));
-  }
-
-  // Plain cell — emit raw escaped text. Avoid the wrapper so unstyled cells
-  // don't acquire spurious DOM nodes that w2grid would have to lay out.
-  return escapeHtml(display);
+  // Build the formatting style string from cell.style.
+  const styleAttr = buildCellStyleAttr(cell.style, isMergedOrigin);
+  const title = describeCell(cell, lastUpdated, stateTitle);
+  const titleAttr = title ? ` title="${escapeAttr(title)}"` : '';
+  const stateAttr = stateClass ? ` data-state="${stateClass}"` : '';
+  // We use a single wrapper that carries BOTH the formatting style (inline)
+  // AND the state class (via data-state mapped through CSS). The wrapper's
+  // class includes 'cell-fmt' as a hook for state-class overrides, plus the
+  // state class itself when present so existing CSS rules continue to win.
+  const cls = stateClass ? `cell-fmt ${stateClass}` : 'cell-fmt';
+  const originCls = isMergedOrigin ? ' plc-merge-origin' : '';
+  const styleAttrFull = styleAttr ? ` style="${styleAttr}"` : '';
+  return `<span class="${cls}${originCls}"${styleAttrFull}${titleAttr}${stateAttr}>${escapeHtml(displayText)}</span>`;
 }
 
-function wrap(text: string, cls: string, title: string): string {
-  return `<span class="${cls}" title="${escapeAttr(title)}">${escapeHtml(text)}</span>`;
+/** Format a value through SheetJS' SSF using an Excel format code. Falls
+ *  back to a plain string conversion on any failure. */
+function applyNumFmt(value: SheetCellValue, numFmt: string | undefined): string {
+  if (value === null || value === undefined) return '';
+  if (!numFmt) return typeof value === 'string' ? value : String(value);
+  // SSF only formats numbers + date numerics; pass strings/booleans through.
+  if (typeof value === 'string' || typeof value === 'boolean') return String(value);
+  try {
+    const ssf = (XLSX as unknown as { SSF?: { format: (fmt: string, v: number) => string } }).SSF;
+    if (!ssf) return String(value);
+    return ssf.format(numFmt, value as number);
+  } catch {
+    return String(value);
+  }
+}
+
+/** Build an inline `style="..."` attribute body from a CellStyle. Returns
+ *  '' (no attribute) when there is nothing to apply. */
+function buildCellStyleAttr(style: CellStyle | undefined, isMergedOrigin: boolean): string {
+  const decls: string[] = [];
+  if (style) {
+    appendFontDecls(decls, style.font);
+    appendFillDecls(decls, style.fill);
+    appendAlignmentDecls(decls, style.alignment);
+    appendBorderDecls(decls, style.border);
+  }
+  if (isMergedOrigin) {
+    // Origin already overflows via the per-grid stylesheet; ensure the inline
+    // wrapper itself doesn't clip.
+    decls.push('overflow:visible');
+  }
+  // Make the wrapper fill its host td so backgrounds and borders read as
+  // cell-wide rather than as a tight box around the text.
+  if (style?.fill || style?.border || style?.alignment) {
+    decls.push('display:block', 'box-sizing:border-box', 'width:100%', 'height:100%');
+  }
+  return decls.length > 0 ? cssEscape(decls.join(';')) : '';
+}
+
+function appendFontDecls(out: string[], font: FontStyle | undefined): void {
+  if (!font) return;
+  if (font.name) out.push(`font-family:${cssQuoteFontFamily(font.name)}`);
+  if (typeof font.size === 'number') out.push(`font-size:${font.size}pt`);
+  if (font.bold) out.push('font-weight:700');
+  if (font.italic) out.push('font-style:italic');
+  const decoParts: string[] = [];
+  if (font.underline) decoParts.push('underline');
+  if (font.strike) decoParts.push('line-through');
+  if (decoParts.length > 0) out.push(`text-decoration:${decoParts.join(' ')}`);
+  if (font.color) out.push(`color:${font.color}`);
+}
+
+function appendFillDecls(out: string[], fill: { color?: string } | undefined): void {
+  if (fill?.color) out.push(`background-color:${fill.color}`);
+}
+
+function appendAlignmentDecls(out: string[], a: AlignmentStyle | undefined): void {
+  if (!a) return;
+  if (a.horizontal) {
+    const map: Record<string, string> = {
+      left: 'left', center: 'center', right: 'right',
+      justify: 'justify', fill: 'left',
+      centerContinuous: 'center', distributed: 'justify',
+    };
+    const v = map[a.horizontal];
+    if (v) out.push(`text-align:${v}`);
+  }
+  if (a.vertical) {
+    // Wrapper is display:block; vertical alignment is achieved through flex.
+    const map: Record<string, string> = {
+      top: 'flex-start', middle: 'center', bottom: 'flex-end',
+      justify: 'center', distributed: 'center',
+    };
+    const v = map[a.vertical];
+    if (v) {
+      out.push('display:flex', `align-items:${v}`);
+      // text-align already drives horizontal; mirror it via justify-content
+      // when horizontal is set so content lands correctly inside the flex box.
+      if (a.horizontal) {
+        const jmap: Record<string, string> = {
+          left: 'flex-start', center: 'center', right: 'flex-end',
+          justify: 'space-between', fill: 'flex-start',
+          centerContinuous: 'center', distributed: 'space-between',
+        };
+        const jv = jmap[a.horizontal];
+        if (jv) out.push(`justify-content:${jv}`);
+      }
+    }
+  }
+  if (a.wrapText) out.push('white-space:pre-wrap', 'word-break:break-word');
+  if (typeof a.indent === 'number' && a.indent > 0) {
+    // Excel indent ≈ 3 chars per level ≈ 9px.
+    out.push(`padding-left:${a.indent * 9}px`);
+  }
+}
+
+function appendBorderDecls(out: string[], b: BorderStyle | undefined): void {
+  if (!b) return;
+  const sides: Array<['top' | 'right' | 'bottom' | 'left', string]> = [
+    ['top', 'border-top'], ['right', 'border-right'],
+    ['bottom', 'border-bottom'], ['left', 'border-left'],
+  ];
+  for (const [key, prop] of sides) {
+    const edge = b[key];
+    if (!edge) continue;
+    out.push(`${prop}:${cssBorderShorthand(edge)}`);
+  }
+}
+
+function cssBorderShorthand(edge: BorderEdge): string {
+  // Map Excel border styles to CSS approximations.
+  let width = '1px';
+  let style: 'solid' | 'dashed' | 'dotted' | 'double' = 'solid';
+  switch (edge.style) {
+    case 'hair': width = '1px'; style = 'solid'; break;
+    case 'thin': width = '1px'; style = 'solid'; break;
+    case 'medium': width = '2px'; style = 'solid'; break;
+    case 'thick': width = '3px'; style = 'solid'; break;
+    case 'double': width = '3px'; style = 'double'; break;
+    case 'dashed': width = '1px'; style = 'dashed'; break;
+    case 'dotted': width = '1px'; style = 'dotted'; break;
+    case 'mediumDashed': width = '2px'; style = 'dashed'; break;
+    case 'dashDot':
+    case 'dashDotDot':
+    case 'slantDashDot':
+      width = '1px'; style = 'dashed'; break;
+    case 'mediumDashDot':
+    case 'mediumDashDotDot':
+      width = '2px'; style = 'dashed'; break;
+  }
+  const color = edge.color ?? '#000000';
+  return `${width} ${style} ${color}`;
+}
+
+function cssQuoteFontFamily(name: string): string {
+  // Quote when the family contains spaces or non-identifier chars.
+  return /^[A-Za-z_][\w-]*$/.test(name) ? name : `'${name.replace(/'/g, "\\'")}'`;
+}
+
+/** Defang inline-style attribute payload — strip embedded quotes/newlines that
+ *  would break out of the attribute. Only the closing-quote and any control
+ *  chars are at risk; ';' and ':' are valid CSS. */
+function cssEscape(s: string): string {
+  return s.replace(/["\r\n]/g, '');
 }
 
 function describeCell(cell: CellModel, lastUpdated: number | undefined, prefix: string | null): string {

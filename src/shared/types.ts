@@ -5,6 +5,67 @@
 
 export type SheetCellValue = string | number | boolean | null;
 
+/** Read-only cell formatting extracted from the source workbook.
+ *  Sparse — every field is optional and omitted when matching Excel defaults
+ *  to keep IPC payloads small. Themed/indexed colors and gradient/patterned
+ *  fills are deferred (see plan); they are simply skipped on extraction. */
+export interface CellStyle {
+  /** Excel format code, e.g. "0.00%", "#,##0.00;[Red](#,##0.00)", "yyyy-mm-dd". */
+  numFmt?: string;
+  font?: FontStyle;
+  fill?: FillStyle;
+  alignment?: AlignmentStyle;
+  border?: BorderStyle;
+}
+
+export interface FontStyle {
+  name?: string;
+  /** Point size as authored in Excel. */
+  size?: number;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
+  /** "#RRGGBB" — alpha stripped, themed/indexed unresolved entries dropped. */
+  color?: string;
+}
+
+export interface FillStyle {
+  /** Solid fill color "#RRGGBB". Patterned/gradient fills not extracted. */
+  color?: string;
+}
+
+export type HorizontalAlign = 'left' | 'center' | 'right' | 'justify' | 'fill' | 'centerContinuous' | 'distributed';
+export type VerticalAlign = 'top' | 'middle' | 'bottom' | 'justify' | 'distributed';
+
+export interface AlignmentStyle {
+  horizontal?: HorizontalAlign;
+  vertical?: VerticalAlign;
+  wrapText?: boolean;
+  /** Excel indent units (each ~3 chars / ~9px). */
+  indent?: number;
+}
+
+export type BorderEdgeStyle =
+  | 'thin' | 'medium' | 'thick'
+  | 'dashed' | 'dotted'
+  | 'double'
+  | 'hair'
+  | 'mediumDashed' | 'dashDot' | 'mediumDashDot'
+  | 'dashDotDot' | 'mediumDashDotDot' | 'slantDashDot';
+
+export interface BorderEdge {
+  style: BorderEdgeStyle;
+  color?: string;
+}
+
+export interface BorderStyle {
+  top?: BorderEdge;
+  right?: BorderEdge;
+  bottom?: BorderEdge;
+  left?: BorderEdge;
+}
+
 export interface CellModel {
   /** A1-style address inside the owning sheet, e.g. "B7" */
   address: string;
@@ -17,8 +78,8 @@ export interface CellModel {
   errored?: boolean;
   /** Cell comment text (Excel "note") if any */
   comment?: string;
-  /** Renderer-resolved style payload; opaque shape kept by exceljs adapter */
-  style?: Record<string, unknown>;
+  /** Read-only formatting extracted from the source workbook. */
+  style?: CellStyle;
 }
 
 export interface SheetModel {
@@ -31,6 +92,10 @@ export interface SheetModel {
   conditionalFormats?: unknown[];
   rowCount: number;
   columnCount: number;
+  /** Per-column width in CSS pixels, keyed by 1-based column index. Sparse. */
+  columnWidths?: Record<number, number>;
+  /** Per-row height in CSS pixels, keyed by 1-based row index. Sparse. */
+  rowHeights?: Record<number, number>;
 }
 
 export interface WorkbookModel {
