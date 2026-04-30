@@ -64,6 +64,18 @@ export interface IpcEventMap {
   'cell:update': { sheet: string; address: string; value: unknown; status?: 'ok' | 'stale' | 'error' };
   /** Modbus connection status changed for a server or redundant pair */
   'modbus:status': { source: string; connected: boolean; activeServer?: string };
+  /**
+   * Long-running workbook open progress. `stage` is a short label, `pct` is
+   * 0..100 (or -1 for indeterminate), `done=true` signals the final tick so
+   * the renderer can dismiss the overlay before the `workbook:open` invoke
+   * resolves.
+   */
+  'workbook:openProgress': {
+    filePath: string;
+    stage: string;
+    pct: number;
+    done?: boolean;
+  };
 }
 
 export type IpcEvent = keyof IpcEventMap;

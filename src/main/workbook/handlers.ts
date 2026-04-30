@@ -43,8 +43,33 @@ export async function handleOpen(filePath: string): Promise<WorkbookModel> {
   const prior = getSession(idFromPath(filePath));
   prior?.formula?.destroy();
 
+  // Long-running workbook opens (large .xlsx, thousands of formulas, named
+  // ranges) can keep the main process busy for several seconds. We surface
+  // staged progress so the renderer can display an overlay, and we yield
+  // (await a setImmediate) between phases so the IPC events actually flush
+  // to the renderer instead of all arriving at once when the work finishes.
+  const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  const sendProgress = (stage: string, pct: number, done = false): void => {
+    try {
+      win?.webContents.send('workbook:openProgress', { filePath, stage, pct, done });
+    } catch {
+      /* window closed mid-load */
+    }
+  };
+  const yieldTick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+  sendProgress('Reading file…', 5);
+  await yieldTick();
+
   const { model } = await openWorkbook(filePath);
+
+  sendProgress('Building formula engine…', 60);
+  await yieldTick();
+
   const formula = createFormulaHost(model);
+
+  sendProgress('Finalizing…', 95);
+  await yieldTick();
 
   putSession({
     id: idFromPath(filePath),
@@ -54,6 +79,8 @@ export async function handleOpen(filePath: string): Promise<WorkbookModel> {
     autosaveShadow: null,
     formula,
   });
+
+  sendProgress('Done', 100, true);
   return model;
 }
 

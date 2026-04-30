@@ -191,13 +191,78 @@ function newWorkbook(): void {
 async function openWorkbook(): Promise<void> {
   const dlg = await window.api.invoke('workbook:openDialog');
   if (!dlg) return;
+  const overlay = showProgressOverlay('Opening workbook…');
+  const off = window.api.on('workbook:openProgress', (p) => {
+    if (p.filePath !== dlg.filePath) return;
+    overlay.update(p.stage, p.pct);
+    if (p.done) overlay.hide();
+  });
   try {
     const model = await window.api.invoke('workbook:open', { filePath: dlg.filePath });
+    overlay.update('Rendering…', 99);
+    // Yield once so the overlay paints "Rendering…" before the (potentially
+    // slow) WorkbookView.render() blocks the main thread.
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
     loadWorkbook(model);
   } catch (err) {
     console.error('[open] failed', err);
     alert('Failed to open workbook: ' + (err instanceof Error ? err.message : String(err)));
+  } finally {
+    off();
+    overlay.hide();
   }
+}
+
+interface ProgressOverlay {
+  update(stage: string, pct: number): void;
+  hide(): void;
+}
+
+function showProgressOverlay(initialStage: string): ProgressOverlay {
+  const host = document.createElement('div');
+  host.setAttribute('role', 'dialog');
+  host.setAttribute('aria-modal', 'true');
+  host.setAttribute('aria-label', 'Loading');
+  host.style.cssText = [
+    'position:fixed', 'inset:0', 'z-index:9999',
+    'display:flex', 'align-items:center', 'justify-content:center',
+    'background:rgba(0,0,0,0.45)', 'backdrop-filter:blur(2px)',
+  ].join(';');
+  const card = document.createElement('div');
+  card.style.cssText = [
+    'min-width:320px', 'max-width:480px',
+    'background:var(--bg, #1f1f1f)', 'color:var(--fg, #eee)',
+    'border:1px solid rgba(255,255,255,0.15)', 'border-radius:6px',
+    'padding:18px 22px', 'font:13px system-ui, sans-serif',
+    'box-shadow:0 8px 24px rgba(0,0,0,0.4)',
+  ].join(';');
+  const stageEl = document.createElement('div');
+  stageEl.textContent = initialStage;
+  stageEl.style.cssText = 'margin-bottom:10px;';
+  const barWrap = document.createElement('div');
+  barWrap.style.cssText = 'height:6px;background:rgba(255,255,255,0.1);border-radius:3px;overflow:hidden;';
+  const bar = document.createElement('div');
+  bar.style.cssText = 'height:100%;width:0%;background:#3b82f6;transition:width 200ms ease;';
+  barWrap.appendChild(bar);
+  card.appendChild(stageEl);
+  card.appendChild(barWrap);
+  host.appendChild(card);
+  // Swallow clicks so the layout below feels frozen — matches user expectation.
+  host.addEventListener('mousedown', (e) => e.stopPropagation());
+  document.body.appendChild(host);
+  let hidden = false;
+  return {
+    update(stage, pct) {
+      if (hidden) return;
+      stageEl.textContent = stage;
+      bar.style.width = (pct < 0 ? 100 : Math.max(0, Math.min(100, pct))) + '%';
+    },
+    hide() {
+      if (hidden) return;
+      hidden = true;
+      host.remove();
+    },
+  };
 }
 
 function loadWorkbook(model: WorkbookModel): void {
