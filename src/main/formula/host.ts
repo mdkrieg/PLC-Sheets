@@ -251,6 +251,22 @@ export function createFormulaHost(model: WorkbookModel): FormulaHost {
     smartRounding: true,
   });
 
+  // Excel treats bare TRUE / FALSE (no parentheses) as boolean literals;
+  // HyperFormula parses them as identifiers and reports "Named expression
+  // TRUE/FALSE not recognized" -> #NAME? for every formula like
+  // =IF(A1, TRUE, FALSE). Register them as workbook-scoped named
+  // expressions that evaluate to TRUE()/FALSE() so the references resolve.
+  const hfAny = hf as unknown as {
+    addNamedExpression: (name: string, expression: string) => unknown;
+  };
+  for (const [name, expr] of [['TRUE', '=TRUE()'], ['FALSE', '=FALSE()']] as const) {
+    try {
+      hfAny.addNamedExpression(name, expr);
+    } catch {
+      /* already registered (e.g. as a workbook defined name) */
+    }
+  }
+
   // Register workbook-scoped named ranges (Excel "defined names") AFTER build.
   // Building with `namedExpressions` argument throws synchronously when any
   // single name fails to resolve (e.g. references a deleted sheet, an array,
@@ -258,9 +274,6 @@ export function createFormulaHost(model: WorkbookModel): FormulaHost {
   // Adding them one at a time lets us skip the offenders and still resolve
   // the rest, so formulas like `=PumpSetpoint` evaluate instead of #NAME?.
   if (model.namedRanges && model.namedRanges.length) {
-    const hfAny = hf as unknown as {
-      addNamedExpression: (name: string, expression: string) => unknown;
-    };
     for (const nr of model.namedRanges) {
       const expr = nr.expression?.trim();
       if (!nr.name || !expr) continue;
