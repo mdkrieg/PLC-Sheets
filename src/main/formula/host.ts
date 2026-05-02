@@ -51,7 +51,14 @@ const MODBUS_FN_NAMES = [
   'MODBUS_WRITE_COIL',
 ] as const;
 
+/** UI pseudo-functions that render as interactive buttons in the grid. */
+const UI_BUTTON_FN_NAMES = [
+  'UI_BUTTON_SET',
+  'UI_BUTTON_PULSE',
+] as const;
+
 let modbusPluginRegistered = false;
+let uiButtonPluginRegistered = false;
 
 /**
  * Modbus addresses arrive from HF as numbers (e.g. 40001) when the user
@@ -226,6 +233,68 @@ function ensureModbusPlugin(): void {
   modbusPluginRegistered = true;
 }
 
+/**
+ * Register UI_BUTTON_SET and UI_BUTTON_PULSE as HF function stubs.
+ * Both functions return their first argument (button_text) as the cell's
+ * cached value so the renderer can use it as the button label.
+ * They are NOT volatile — the label doesn't change unless the formula is edited.
+ */
+function ensureUiButtonPlugin(): void {
+  if (uiButtonPluginRegistered) return;
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const hfMod = require('hyperformula') as { FunctionPlugin: any };
+  const Base = hfMod.FunctionPlugin;
+
+  class UiButtonPlugin extends Base {
+    uiButtonSet(_ast: unknown, state: unknown): unknown {
+      // Returns button_text (arg[0]) so cell.cached = the label string.
+      return runWithArgs(
+        this as unknown as { runFunction?: (...a: unknown[]) => unknown },
+        _ast, state,
+        (args) => (args[0] !== undefined && args[0] !== null ? String(args[0]) : 'Button'),
+      );
+    }
+    uiButtonPulse(_ast: unknown, state: unknown): unknown {
+      return runWithArgs(
+        this as unknown as { runFunction?: (...a: unknown[]) => unknown },
+        _ast, state,
+        (args) => (args[0] !== undefined && args[0] !== null ? String(args[0]) : 'Button'),
+      );
+    }
+  }
+
+  (UiButtonPlugin as any).implementedFunctions = {
+    UI_BUTTON_SET: {
+      method: 'uiButtonSet',
+      // button_text, reference (cell addr), value
+      parameters: [
+        { argumentType: 'ANY' },
+        { argumentType: 'ANY' },
+        { argumentType: 'ANY' },
+      ],
+    },
+    UI_BUTTON_PULSE: {
+      method: 'uiButtonPulse',
+      // button_text, reference, on_value, off_value, [pulse_seconds=1]
+      parameters: [
+        { argumentType: 'ANY' },
+        { argumentType: 'ANY' },
+        { argumentType: 'ANY' },
+        { argumentType: 'ANY' },
+        { argumentType: 'ANY', optionalArg: true, defaultValue: 1 },
+      ],
+    },
+  };
+
+  const translations = UI_BUTTON_FN_NAMES.reduce<Record<string, string>>((acc, n) => {
+    acc[n] = n;
+    return acc;
+  }, {});
+
+  HyperFormula.registerFunctionPlugin(UiButtonPlugin as any, { enGB: translations, enUS: translations });
+  uiButtonPluginRegistered = true;
+}
+
 export interface FormulaHost {
   /** Push an edit (raw cell input) and return cells whose displayed value changed. */
   applyEdit(sheetName: string, address: string, raw: string): Array<{ sheet: string; address: string; value: SheetCellValue; errored?: boolean }>;
@@ -239,6 +308,7 @@ export interface FormulaHost {
 
 export function createFormulaHost(model: WorkbookModel): FormulaHost {
   ensureModbusPlugin();
+  ensureUiButtonPlugin();
 
   // Build sheets-data shaped as HF expects: { sheetName: [[row0col0, row0col1...], ...] }.
   const sheetsData: Record<string, unknown[][]> = {};

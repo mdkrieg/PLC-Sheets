@@ -45,6 +45,18 @@ const FUNCTIONS: FnSpec[] = [
     params: ['value', 'address', '[bit=-1]', '[poll_rate=-1]', '[readback_address]'],
     description: 'Write a coil or a single bit of a holding register.',
   },
+  {
+    name: 'UI_BUTTON_SET',
+    signature: 'UI_BUTTON_SET(button_text, reference, value)',
+    params: ['button_text', 'reference', 'value'],
+    description: 'Render cell as a clickable button. Clicking writes value to the referenced cell.',
+  },
+  {
+    name: 'UI_BUTTON_PULSE',
+    signature: 'UI_BUTTON_PULSE(button_text, reference, on_value, off_value, [pulse_seconds])',
+    params: ['button_text', 'reference', 'on_value', 'off_value', '[pulse_seconds=1]'],
+    description: 'Render cell as a clickable button. Click writes on_value to the referenced cell; after pulse_seconds the cell is reset to off_value.',
+  },
 ];
 
 export function attachFormulaAutocomplete(input: HTMLInputElement): () => void {

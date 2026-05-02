@@ -93,6 +93,42 @@ NOTE: the non-existence of these formulas in excel is not a concern for us, save
 
 Note on the usage of "bit" - this is exclusive to the other types and requires either a coil type or a register plus the optional bit number or a register formatted as "address.n" or "address bit n" or "address:n" where n is the bit number (of the 16bit register) and the optional bit parameter is left off (warn in cell if both are present).
 
+## UI Functions
+
+The following pseudo-functions are recognized by the formula engine and render as interactive HTML buttons in the grid rather than displaying a computed value.  They are NOT volatile — the button label is stable until the formula is edited.
+
+### UI_BUTTON_SET
+
+```
+=UI_BUTTON_SET(button_text, reference, value)
+```
+
+| Argument | Type | Description |
+|---|---|---|
+| `button_text` | string | Label shown on the button face.  This is also the cell's `cached` display value. |
+| `reference` | cell ref | Target cell to write to when clicked (e.g. `B2`, `$B$2`).  Same-sheet only. |
+| `value` | string / number | Raw value to write to the target cell on each click. |
+
+**Behavior:** Each click sends an IPC `workbook:buttonClick` message with `actionType:"set"`.  The main process writes `value` to `reference` via `applyEdit`, returns the downstream change deltas, and the renderer applies them immediately so dependent cells and MODBUS write-back cells update in real time.
+
+### UI_BUTTON_PULSE
+
+```
+=UI_BUTTON_PULSE(button_text, reference, on_value, off_value [, pulse_seconds])
+```
+
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `button_text` | string | — | Label shown on the button face. |
+| `reference` | cell ref | — | Target cell to write to. Same-sheet only. |
+| `on_value` | string / number | — | Written to `reference` on click. |
+| `off_value` | string / number | — | Written to `reference` after the pulse delay. |
+| `pulse_seconds` | number | `1` | Seconds to hold `on_value` before reverting to `off_value`. |
+
+**Behavior:** A click immediately writes `on_value` and starts a server-side timer.  After `pulse_seconds` the main process writes `off_value` and pushes `cell:update` events to all renderer windows so the revert is visible without waiting for the next poll tick.  A second click while the timer is running cancels the pending revert and restarts the pulse from the beginning.
+
+**Note:** `off_value` is only ever written as the trailing edge of a pulse — the cell is not pre-initialized to `off_value` when the workbook loads.
+
 ## Layout
 The default "File Edit ..." toolbar of the Electron front-end is permanently hidden.
 

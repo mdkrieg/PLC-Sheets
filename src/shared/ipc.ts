@@ -33,6 +33,25 @@ export interface IpcRequestMap {
     payload: { filePath: string; sheet: string; address: string; raw: string };
     result: { changes: { sheet: string; address: string; value: unknown; errored?: boolean }[] };
   };
+  /**
+   * Fired when a UI_BUTTON_SET or UI_BUTTON_PULSE button is clicked.
+   * The main process writes `value` to `targetAddress`, and for PULSE also
+   * schedules `offValue` to be written after `pulseSeconds` seconds.
+   * Returns all downstream cell changes so the renderer can refresh.
+   */
+  'workbook:buttonClick': {
+    payload: {
+      filePath: string;
+      targetSheet: string;
+      targetAddress: string;
+      actionType: 'set' | 'pulse';
+      /** Raw string to write, e.g. "42" or "\"ON\"". */
+      value: string;
+      offValue?: string;
+      pulseSeconds?: number;
+    };
+    result: { changes: { sheet: string; address: string; value: unknown; errored?: boolean }[] };
+  };
   'workbook:autosave': {
     payload: { filePath: string; workbook: WorkbookModel };
     result: { shadowPath: string; modifiedAt: string };

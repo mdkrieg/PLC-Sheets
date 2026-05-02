@@ -13,6 +13,10 @@ import { idFromPath, putSession, getSession, removeSession } from './state';
 import { createFormulaHost } from '../formula/host';
 import type { WorkbookModel } from '../../shared/types';
 
+/** Active pulse timers keyed by `"${filePath}!${sheet}!${address}"` so a
+ *  second button click while the timer is running cancels and restarts the pulse. */
+const activePulseTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
 const FILTERS = [
   { name: 'Spreadsheet', extensions: ['xlsx', 'xlsm', 'xls', 'csv'] },
   { name: 'All files', extensions: ['*'] },
@@ -135,6 +139,71 @@ export function handleEditCell(
     console.error('[editCell] applyEdit threw:', err);
     return { changes: [] };
   }
+}
+
+/**
+ * Handle a UI_BUTTON_SET or UI_BUTTON_PULSE button click from the renderer.
+ * Writes `value` to `targetAddress` immediately and, for PULSE, schedules a
+ * delayed write of `offValue` after `pulseSeconds` seconds. The delayed write
+ * pushes `cell:update` events to all renderer windows so they refresh without
+ * waiting for the next poll tick.
+ */
+export function handleButtonClick(
+  filePath: string,
+  targetSheet: string,
+  targetAddress: string,
+  actionType: 'set' | 'pulse',
+  value: string,
+  offValue?: string,
+  pulseSeconds?: number,
+): { changes: { sheet: string; address: string; value: unknown; errored?: boolean }[] } {
+  const s = getSession(idFromPath(filePath));
+  if (!s?.formula) {
+    console.warn('[buttonClick] no session for', filePath);
+    return { changes: [] };
+  }
+  s.dirty = true;
+  let changes: { sheet: string; address: string; value: unknown; errored?: boolean }[];
+  try {
+    changes = s.formula.applyEdit(targetSheet, targetAddress, value);
+  } catch (err) {
+    console.error('[buttonClick] applyEdit threw:', err);
+    return { changes: [] };
+  }
+
+  if (actionType === 'pulse' && offValue !== undefined && offValue !== '' && (pulseSeconds ?? 1) > 0) {
+    const key = `${filePath}!${targetSheet}!${targetAddress}`;
+    const existing = activePulseTimers.get(key);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      activePulseTimers.delete(key);
+      const s2 = getSession(idFromPath(filePath));
+      if (!s2?.formula) return;
+      s2.dirty = true;
+      let offChanges: { sheet: string; address: string; value: unknown; errored?: boolean }[];
+      try {
+        offChanges = s2.formula.applyEdit(targetSheet, targetAddress, offValue);
+      } catch {
+        return;
+      }
+      if (offChanges.length === 0) return;
+      for (const win of BrowserWindow.getAllWindows()) {
+        for (const ch of offChanges) {
+          win.webContents.send('cell:update', {
+            sheet: ch.sheet,
+            address: ch.address,
+            value: ch.value,
+            status: ch.errored ? 'error' : 'ok',
+          });
+        }
+      }
+    }, (pulseSeconds ?? 1) * 1000);
+
+    activePulseTimers.set(key, timer);
+  }
+
+  return { changes };
 }
 
 /**

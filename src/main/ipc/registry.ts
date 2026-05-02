@@ -8,7 +8,7 @@
 
 import { ipcMain, app } from 'electron';
 import type { IpcChannel, IpcPayload, IpcResult } from '../../shared/ipc';
-import { handleOpen, handleOpenDialog, handleSave, handleSaveAsDialog, handleClose, handleEditCell, handleAutosave } from '../workbook/handlers';
+import { handleOpen, handleOpenDialog, handleSave, handleSaveAsDialog, handleClose, handleEditCell, handleAutosave, handleButtonClick } from '../workbook/handlers';
 import { handleAppAbout, handleOpenExternal } from '../app/handlers';
 import {
   handleConfigGet,
@@ -48,6 +48,11 @@ export function registerIpcHandlers(): void {
 
   // Phase 3: incremental cell-edit recalc through HyperFormula.
   handle('workbook:editCell', (p) => handleEditCell(p.filePath, p.sheet, p.address, p.raw));
+
+  // UI button actions (UI_BUTTON_SET / UI_BUTTON_PULSE pseudo-functions).
+  handle('workbook:buttonClick', (p) =>
+    handleButtonClick(p.filePath, p.targetSheet, p.targetAddress, p.actionType, p.value, p.offValue, p.pulseSeconds),
+  );
 
   // Phase 6: autosave shadow file.
   handle('workbook:autosave', (p) => handleAutosave(p.filePath, p.workbook));

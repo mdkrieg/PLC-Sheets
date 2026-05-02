@@ -212,7 +212,7 @@ export class WorkbookView {
           const cellModel = sm.cells[address];
           if (!cellModel) return '';
           const last = this.lastUpdatedAt.get(`${sm.name}!${address}`);
-          return formatCellDisplay(cellModel, last, this.mergedOrigins.has(address));
+          return formatCellDisplay(cellModel, last, this.mergedOrigins.has(address), address);
         },
       });
     }
@@ -305,6 +305,21 @@ export class WorkbookView {
     });
     this.grid.render();
     this.applyDynamicSheetStyles(gridName, sheet);
+
+    // Attach a single delegated listener for UI_BUTTON_* clicks.  We use the
+    // capture phase so the click reaches us before w2ui's own handler runs,
+    // letting us stopPropagation and avoid an unwanted cell-select side-effect.
+    const old = (gridHost as unknown as Record<string, unknown>)['_plcBtnListener'] as EventListener | undefined;
+    if (old) gridHost.removeEventListener('click', old, true);
+    const btnListener: EventListener = (e: Event) => {
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-plc-btn]');
+      if (!btn) return;
+      e.stopPropagation();
+      const addr = btn.getAttribute('data-plc-btn');
+      if (addr) void this.handleCellButtonClick(addr);
+    };
+    (gridHost as unknown as Record<string, unknown>)['_plcBtnListener'] = btnListener;
+    gridHost.addEventListener('click', btnListener, true);
   }
 
   private syncFormulaBarFromSelection(): void {
@@ -714,6 +729,40 @@ export class WorkbookView {
     this.applyServerChanges([{ sheet: sheetName, address, value, errored }]);
   }
 
+  /**
+   * Called when the user clicks a button rendered by a UI_BUTTON_SET or
+   * UI_BUTTON_PULSE formula.  Parses the formula text at `address`, then
+   * sends `workbook:buttonClick` to the main process, and applies the
+   * returned cell changes so the UI updates without waiting for the next poll.
+   */
+  private async handleCellButtonClick(address: string): Promise<void> {
+    const sheet = this.model.sheets[this.activeSheetIndex];
+    if (!sheet) return;
+    const cell = sheet.cells[address];
+    if (!cell?.formula) return;
+
+    const parsed = parseUiButtonFormula(cell.formula);
+    if (!parsed) {
+      console.warn('[UI_BUTTON] could not parse formula at', address, ':', cell.formula);
+      return;
+    }
+
+    try {
+      const result = await window.api.invoke('workbook:buttonClick', {
+        filePath: this.filePath,
+        targetSheet: sheet.name, // same-sheet only for now
+        targetAddress: parsed.targetRef,
+        actionType: parsed.kind,
+        value: parsed.value,
+        offValue: parsed.offValue,
+        pulseSeconds: parsed.pulseSeconds,
+      });
+      this.applyServerChanges(result.changes);
+    } catch (err) {
+      console.error('[UI_BUTTON] buttonClick failed:', err);
+    }
+  }
+
   /** Rewrite cell text in the live grid records without re-mounting the grid. */
   private repaintActiveSheet(): void {
     const sheet = this.model.sheets[this.activeSheetIndex];
@@ -796,7 +845,17 @@ function cellEditValue(cell: CellModel): string {
  *  source workbook. State sentinels (#NAME?, PENDING, #STALE, ...) take
  *  precedence over numFmt but still render inside the formatting wrapper so
  *  fonts/alignment/borders remain consistent. */
-function formatCellDisplay(cell: CellModel, lastUpdated: number | undefined, isMergedOrigin: boolean): string {
+function formatCellDisplay(cell: CellModel, lastUpdated: number | undefined, isMergedOrigin: boolean, address = ''): string {
+  // UI_BUTTON_SET / UI_BUTTON_PULSE: render as a clickable <button>.
+  // The check is intentionally before any error/pending detection so button
+  // cells always render as buttons regardless of transient cached state.
+  if (cell.formula && /\bUI_BUTTON_(SET|PULSE)\b/i.test(cell.formula)) {
+    const label = escapeHtml(cell.cached != null ? String(cell.cached) : 'Button');
+    const styleAttr = buildCellStyleAttr(cell.style, isMergedOrigin);
+    const sAttr = styleAttr ? ` style="${styleAttr}"` : '';
+    const oCls = isMergedOrigin ? ' plc-merge-origin' : '';
+    return `<span class="cell-fmt${oCls}"${sAttr}><button class="cell-button" data-plc-btn="${escapeAttr(address)}">${label}</button></span>`;
+  }
   // Resolve display text + state class first.
   let displayText: string;
   let stateClass: string | null = null;
@@ -1017,6 +1076,81 @@ function escapeHtml(s: string): string {
 }
 function escapeAttr(s: string): string {
   return escapeHtml(s);
+}
+
+/**
+ * Split a CSV argument list respecting quoted strings (single or double).
+ * Handles escaped quotes within strings but does not evaluate escapes.
+ */
+function splitCsvArgs(s: string): string[] {
+  const args: string[] = [];
+  let cur = '';
+  let inStr = false;
+  let strChar = '';
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]!;
+    if (inStr) {
+      if (ch === strChar) {
+        inStr = false;
+      } else {
+        cur += ch;
+      }
+    } else if (ch === '"' || ch === "'") {
+      inStr = true;
+      strChar = ch;
+    } else if (ch === ',') {
+      args.push(cur.trim());
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  args.push(cur.trim());
+  return args;
+}
+
+/**
+ * Parse a UI_BUTTON_SET or UI_BUTTON_PULSE formula string (WITHOUT the leading `=`).
+ * Returns a descriptor or null if the formula doesn't match.
+ *
+ * UI_BUTTON_SET(button_text, reference, value)
+ * UI_BUTTON_PULSE(button_text, reference, on_value, off_value [, pulse_seconds=1])
+ *
+ * `reference` is a cell reference like `B2` or `$B$2`. Cross-sheet refs not supported.
+ */
+function parseUiButtonFormula(formula: string): {
+  kind: 'set' | 'pulse';
+  targetRef: string;
+  value: string;
+  offValue?: string;
+  pulseSeconds?: number;
+} | null {
+  const m = formula.match(/^\s*UI_BUTTON_(SET|PULSE)\s*\(([\s\S]*)\)\s*$/i);
+  if (!m) return null;
+  const kind = m[1]!.toUpperCase() === 'SET' ? 'set' : 'pulse';
+  const args = splitCsvArgs(m[2]!);
+
+  // args[0] = button_text (ignored here — used by HF as cached value / label)
+  // args[1] = reference cell (e.g. B2, $B$2, Sheet1!B2 — we only take the A1 tail)
+  // args[2] = on_value / value
+  // args[3] = off_value (PULSE only)
+  // args[4] = pulse_seconds (PULSE only, optional)
+
+  const refRaw = args[1] ?? '';
+  // Strip any sheet prefix and `$` characters; grab last A1 segment.
+  const refMatch = refRaw.replace(/\$/g, '').match(/([A-Za-z]{1,3}\d+)$/);
+  if (!refMatch) return null;
+  const targetRef = refMatch[1]!.toUpperCase();
+
+  const value = args[2] ?? '';
+  if (kind === 'set') {
+    return { kind, targetRef, value };
+  }
+  // PULSE
+  const offValue = args[3] ?? '';
+  const psRaw = args[4];
+  const pulseSeconds = psRaw !== undefined && psRaw !== '' ? Number(psRaw) : 1;
+  return { kind, targetRef, value, offValue, pulseSeconds: Number.isFinite(pulseSeconds) ? pulseSeconds : 1 };
 }
 
 /** Parse what the user typed into the formula bar / cell into a CellModel. */
