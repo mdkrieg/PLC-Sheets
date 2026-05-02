@@ -170,6 +170,11 @@ body.theme-dark .cell-disabled { color: #e8a04a; }
 body.theme-dark .cell-live { animation-name: cell-flash-dark; }
 @keyframes cell-flash-dark { 0% { background: rgba(111,207,151,0.30); } 100% { background: transparent; } }
 
+/* Remove w2ui's built-in td padding so .cell-fmt can own the full cell box.
+ * Padding is re-applied inside .cell-fmt so text still has breathing room.
+ * This is what allows Excel-style borders to sit flush at the cell edge. */
+.w2ui-grid .w2ui-grid-data { padding: 0 !important; }
+
 /* === Read-only workbook formatting wrapper ===
  * The .cell-fmt span wraps every rendered cell and carries inline styles
  * extracted from the source xlsx (font, fill, alignment, borders).
@@ -177,8 +182,14 @@ body.theme-dark .cell-live { animation-name: cell-flash-dark; }
  * formatting-supplied colors so error/pending/stale states stay legible.
  */
 .cell-fmt {
-  /* Default: behave like the surrounding td so unstyled cells look unchanged. */
-  display: inline;
+  /* Always fill the full td so borders land at the cell edge and backgrounds
+   * cover the entire cell area, matching how Excel draws them. */
+  display: block;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  /* Restore the padding w2ui normally provides. */
+  padding: 3px 4px;
 }
 /* When a state class is also present, force foreground/background to the
  * state's intent rather than the workbook formatting. We keep the workbook

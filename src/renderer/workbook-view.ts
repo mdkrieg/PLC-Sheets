@@ -884,10 +884,11 @@ function buildCellStyleAttr(style: CellStyle | undefined, isMergedOrigin: boolea
     // wrapper itself doesn't clip.
     decls.push('overflow:visible');
   }
-  // Make the wrapper fill its host td so backgrounds and borders read as
-  // cell-wide rather than as a tight box around the text.
-  if (style?.fill || style?.border || style?.alignment) {
-    decls.push('display:block', 'box-sizing:border-box', 'width:100%', 'height:100%');
+  // When a border is present, suppress the wrapper's default padding so the
+  // border sits flush at the td edge (matching Excel layout). Text indentation
+  // for non-border cells is handled by the CSS padding on .cell-fmt.
+  if (style?.border) {
+    decls.push('padding:3px 4px');
   }
   return decls.length > 0 ? cssEscape(decls.join(';')) : '';
 }
