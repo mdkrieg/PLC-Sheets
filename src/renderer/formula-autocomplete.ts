@@ -57,6 +57,12 @@ const FUNCTIONS: FnSpec[] = [
     params: ['button_text', 'reference', 'on_value', 'off_value', '[pulse_seconds=1]'],
     description: 'Render cell as a clickable button. Click writes on_value to the referenced cell; after pulse_seconds the cell is reset to off_value.',
   },
+  {
+    name: 'HISTORY_CAPTURE',
+    signature: 'HISTORY_CAPTURE(tag, value [, deadband [, heartbeat_seconds]])',
+    params: ['tag', 'value', '[deadband=0]', '[heartbeat_seconds=60]'],
+    description: 'Record value to the historian database. tag is a unique alphanumeric name. The cell displays recording status. Timestamp is taken at poll time.',
+  },
 ];
 
 export function attachFormulaAutocomplete(input: HTMLInputElement): () => void {

@@ -7,7 +7,8 @@
  * in another transitive dep tree we'd rather not ship.
  */
 
-import { app, shell } from 'electron';
+import { app, shell, BrowserWindow } from 'electron';
+import path from 'node:path';
 
 export function handleAppAbout() {
   return {
@@ -52,5 +53,43 @@ export async function handleOpenExternal(url: string): Promise<{ ok: true }> {
     throw new Error('Only http(s) URLs may be opened');
   }
   await shell.openExternal(parsed.toString());
+  return { ok: true };
+}
+
+/** Singleton trend viewer window. */
+let trendViewerWin: BrowserWindow | null = null;
+
+export function handleOpenTrendViewer(): { ok: true } {
+  if (trendViewerWin && !trendViewerWin.isDestroyed()) {
+    trendViewerWin.focus();
+    return { ok: true };
+  }
+
+  const win = new BrowserWindow({
+    width: 1000,
+    height: 600,
+    minWidth: 600,
+    minHeight: 400,
+    title: 'PLC-Sheets — Trend Viewer',
+    webPreferences: {
+      preload: path.join(__dirname, '..', '..', 'preload', 'index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  win.setMenuBarVisibility(false);
+
+  if (process.env.VITE_DEV_SERVER_URL) {
+    void win.loadURL(process.env.VITE_DEV_SERVER_URL + 'trend-viewer.html');
+  } else {
+    void win.loadFile(path.join(__dirname, '..', '..', '..', 'dist', 'trend-viewer.html'));
+  }
+
+  win.on('closed', () => {
+    trendViewerWin = null;
+  });
+
+  trendViewerWin = win;
   return { ok: true };
 }

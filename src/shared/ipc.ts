@@ -69,6 +69,17 @@ export interface IpcRequestMap {
 
   'log:list': { payload: void; result: LogEntry[] };
   'log:clear': { payload: void; result: { ok: true } };
+
+  // Historian
+  'history:query': {
+    payload: { tag: string; startTs: number; endTs: number; maxPoints?: number };
+    result: { tag: string; points: { ts: number; value: number | boolean | null }[] };
+  };
+  'history:tagList': {
+    payload: void;
+    result: { tags: { id: number; name: string }[] };
+  };
+  'history:openViewer': { payload: void; result: { ok: true } };
 }
 
 export type IpcChannel = keyof IpcRequestMap;
@@ -95,6 +106,8 @@ export interface IpcEventMap {
     pct: number;
     done?: boolean;
   };
+  /** A new historian sample was committed; used by the trend viewer live mode. */
+  'history:point': { tag: string; ts: number; value: number | boolean | null };
 }
 
 export type IpcEvent = keyof IpcEventMap;

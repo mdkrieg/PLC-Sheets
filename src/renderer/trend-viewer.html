@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>PLC-Sheets — Trend Viewer</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      body { display: flex; flex-direction: column; height: 100vh; margin: 0; overflow: hidden; }
+      #tv-toolbar {
+        display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+        padding: 6px 10px; border-bottom: 1px solid var(--border);
+        background: var(--bg-toolbar); flex-shrink: 0;
+      }
+      #tv-toolbar label { font-size: 12px; color: var(--fg-muted); }
+      #tv-toolbar select, #tv-toolbar input[type="datetime-local"] {
+        font-size: 12px; padding: 2px 4px;
+        background: var(--bg-alt); color: var(--fg); border: 1px solid var(--border);
+      }
+      #tv-toolbar button {
+        font-size: 12px; padding: 3px 8px; cursor: pointer;
+        background: var(--bg-alt); color: var(--fg); border: 1px solid var(--border);
+      }
+      #tv-toolbar button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+      #tv-chart { flex: 1; min-height: 0; position: relative; }
+      #tv-chart .u-wrap { width: 100% !important; height: 100% !important; }
+      .tv-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+      #tv-status { font-size: 11px; color: var(--fg-muted); margin-left: auto; }
+    </style>
+  </head>
+  <body class="theme-light">
+    <div id="tv-toolbar">
+      <label>Tags:</label>
+      <select id="tv-tag-select" multiple size="1" style="min-width:140px"></select>
+      <div class="tv-sep"></div>
+      <button data-preset="1h">Last 1h</button>
+      <button data-preset="6h">Last 6h</button>
+      <button data-preset="24h">Last 24h</button>
+      <button data-preset="7d">Last 7d</button>
+      <div class="tv-sep"></div>
+      <label>From: <input type="datetime-local" id="tv-from" /></label>
+      <label>To: <input type="datetime-local" id="tv-to" /></label>
+      <button id="tv-query-btn">Query</button>
+      <div class="tv-sep"></div>
+      <button id="tv-live-btn">Live</button>
+      <span id="tv-status"></span>
+    </div>
+    <div id="tv-chart"></div>
+    <script type="module" src="./trend-viewer.ts"></script>
+  </body>
+</html>

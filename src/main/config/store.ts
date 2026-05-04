@@ -13,12 +13,20 @@
 import { app } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import type { AppConfig } from '../../shared/types';
+import type { AppConfig, HistorianConfig } from '../../shared/types';
 import { log } from '../modbus/logBus';
+
+export const DEFAULT_HISTORIAN_CONFIG: HistorianConfig = {
+  defaultDeadband: 0,
+  defaultHeartbeatSec: 60,
+  batchFlushMs: 1000,
+  retentionDays: 30,
+};
 
 const DEFAULT_CONFIG: AppConfig = {
   servers: [],
   interfaces: [],
+  historian: { ...DEFAULT_HISTORIAN_CONFIG },
 };
 
 function configPath(): string {
@@ -35,6 +43,8 @@ export async function loadConfig(): Promise<AppConfig> {
     }
     // Strip any legacy `redundant` key (now folded into InterfaceConfig).
     delete (parsed as unknown as { redundant?: unknown }).redundant;
+    // Backfill historian defaults for configs saved before this feature.
+    if (!parsed.historian) parsed.historian = { ...DEFAULT_HISTORIAN_CONFIG };
     return parsed;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {

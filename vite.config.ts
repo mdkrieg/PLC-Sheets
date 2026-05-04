@@ -14,6 +14,12 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, 'dist'),
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, 'src/renderer/index.html'),
+        'trend-viewer': path.resolve(__dirname, 'src/renderer/trend-viewer.html'),
+      },
+    },
   },
   plugins: [
     electron([
@@ -23,7 +29,7 @@ export default defineConfig({
           build: {
             outDir: path.resolve(__dirname, 'dist-electron/main'),
             rollupOptions: {
-              external: ['electron', 'modbus-serial', 'exceljs', 'hyperformula', 'electron-store', 'xlsx'],
+              external: ['electron', 'modbus-serial', 'exceljs', 'hyperformula', 'electron-store', 'xlsx', 'classic-level'],
             },
           },
         },

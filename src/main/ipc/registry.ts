@@ -9,7 +9,7 @@
 import { ipcMain, app } from 'electron';
 import type { IpcChannel, IpcPayload, IpcResult } from '../../shared/ipc';
 import { handleOpen, handleOpenDialog, handleSave, handleSaveAsDialog, handleClose, handleEditCell, handleAutosave, handleButtonClick } from '../workbook/handlers';
-import { handleAppAbout, handleOpenExternal } from '../app/handlers';
+import { handleAppAbout, handleOpenExternal, handleOpenTrendViewer } from '../app/handlers';
 import {
   handleConfigGet,
   handleConfigSet,
@@ -24,6 +24,7 @@ import {
   scheduleVolatileRecompute,
 } from '../modbus/handlers';
 import { modbusManager } from '../modbus/manager';
+import { handleHistoryQuery, handleHistoryTagList } from '../historian/handlers';
 
 type Handler<C extends IpcChannel> = (payload: IpcPayload<C>) => Promise<IpcResult<C>> | IpcResult<C>;
 
@@ -72,6 +73,11 @@ export function registerIpcHandlers(): void {
   // Phase 4: log inspection.
   handle('log:list', () => handleLogList());
   handle('log:clear', () => handleLogClear());
+
+  // Historian
+  handle('history:query', (p) => handleHistoryQuery(p));
+  handle('history:tagList', () => handleHistoryTagList());
+  handle('history:openViewer', () => handleOpenTrendViewer());
 
   // Drive volatile-formula recompute whenever any poll cache updates.
   modbusManager.setUpdateListener(() => scheduleVolatileRecompute());

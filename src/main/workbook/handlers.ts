@@ -12,6 +12,19 @@ import { openWorkbook, saveWorkbook, closeWorkbook } from './io';
 import { idFromPath, putSession, getSession, removeSession } from './state';
 import { createFormulaHost } from '../formula/host';
 import type { WorkbookModel } from '../../shared/types';
+import { HistorianDB } from '../historian/db';
+import { HistorianWriter } from '../historian/writer';
+import { startRetention } from '../historian/retention';
+import { setActiveHistorianDB } from '../historian/handlers';
+import { loadConfig } from '../config/store';
+import { DEFAULT_HISTORIAN_CONFIG } from '../config/store';
+
+/** Per-workbook historian state, keyed by filePath. */
+const historianSessions = new Map<string, {
+  db: HistorianDB;
+  writer: HistorianWriter;
+  stopRetention: () => void;
+}>();
 
 /** Active pulse timers keyed by `"${filePath}!${sheet}!${address}"` so a
  *  second button click while the timer is running cancels and restarts the pulse. */
@@ -75,6 +88,29 @@ export async function handleOpen(filePath: string): Promise<WorkbookModel> {
   sendProgress('Finalizing…', 95);
   await yieldTick();
 
+  // Open the historian DB for this workbook (non-blocking; errors are logged).
+  void (async () => {
+    try {
+      const histDir = filePath + '.history';
+      const db = new HistorianDB();
+      await db.open(histDir);
+
+      const cfg = await loadConfig();
+      const historianCfg = cfg.historian ?? { ...DEFAULT_HISTORIAN_CONFIG };
+
+      const writer = new HistorianWriter();
+      writer.start(db, historianCfg);
+
+      const stopRetention = startRetention(db, historianCfg.retentionDays);
+
+      historianSessions.set(filePath, { db, writer, stopRetention });
+      setActiveHistorianDB(db);
+      formula.setHistorianWriter(writer);
+    } catch (err) {
+      console.error('[historian] failed to open for', filePath, (err as Error).message);
+    }
+  })();
+
   putSession({
     id: idFromPath(filePath),
     filePath,
@@ -113,9 +149,20 @@ export async function handleSave(filePath: string, model: WorkbookModel): Promis
 export function handleClose(filePath: string): { ok: true } {
   const id = idFromPath(filePath);
   const s = getSession(id);
+  s?.formula?.setHistorianWriter(null);
   s?.formula?.destroy();
   removeSession(id);
   closeWorkbook(filePath);
+
+  // Shut down historian for this workbook
+  const hist = historianSessions.get(filePath);
+  if (hist) {
+    hist.stopRetention();
+    void hist.writer.flush().then(() => hist.db.close());
+    historianSessions.delete(filePath);
+    setActiveHistorianDB(null);
+  }
+
   return { ok: true };
 }
 

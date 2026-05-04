@@ -34,6 +34,7 @@ interface SectionOpenState {
   file: boolean;
   workbook: boolean;
   config: boolean;
+  historian: boolean;
   modbus: boolean;
   opcda: boolean;
   opcua: boolean;
@@ -50,6 +51,7 @@ export class Sidebar {
     file: true,
     workbook: true,
     config: false,
+    historian: false,
     modbus: true,
     opcda: false,
     opcua: false,
@@ -101,6 +103,7 @@ export class Sidebar {
         ${this.fileSection()}
         ${this.workbookSection()}
         ${this.configSection()}
+        ${this.historianSection()}
         ${this.modbusSection()}
         ${this.skeletonSection('opcda', 'OPC DA')}
         ${this.skeletonSection('opcua', 'OPC UA')}
@@ -111,6 +114,7 @@ export class Sidebar {
     this.wireFile();
     this.wireWorkbook();
     this.wireConfig();
+    this.wireHistorian();
     this.wireModbus();
   }
 
@@ -197,8 +201,34 @@ export class Sidebar {
     root.querySelector<HTMLButtonElement>('[data-act="diagnostics"]')?.addEventListener('click', () => this.callbacks.onShowSettings('diagnostics'));
   }
 
-  // ------------------------------------------------------------- Skeleton ---
+  // ----------------------------------------------------------- Historian ---
 
+  private historianSection(): string {
+    return `
+      <details class="sidebar-section" data-section="historian" ${this.open.historian ? 'open' : ''}>
+        <summary>Historian</summary>
+        <div class="section-body">
+          <div class="sidebar-btn-row">
+            <button class="w2ui-btn" data-act="trend-viewer">Trend Viewer</button>
+            <button class="w2ui-btn" data-act="historian-settings">Settings</button>
+          </div>
+        </div>
+      </details>
+    `;
+  }
+
+  private wireHistorian(): void {
+    const root = this.host.querySelector('details[data-section="historian"]');
+    if (!root) return;
+    root.querySelector<HTMLButtonElement>('[data-act="trend-viewer"]')?.addEventListener('click', () => {
+      void window.api.invoke('history:openViewer');
+    });
+    root.querySelector<HTMLButtonElement>('[data-act="historian-settings"]')?.addEventListener('click', () => {
+      this.callbacks.onShowSettings('historian' as Parameters<typeof this.callbacks.onShowSettings>[0]);
+    });
+  }
+
+  // ------------------------------------------------------------- Skeleton ---
   private skeletonSection(key: 'opcda' | 'opcua' | 'eip', label: string): string {
     return `
       <details class="sidebar-section" data-section="${key}" ${this.open[key] ? 'open' : ''}>

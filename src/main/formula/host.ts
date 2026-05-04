@@ -25,6 +25,7 @@ import type { CellModel, ModbusDataType, SheetCellValue, WorkbookModel } from '.
 import { parseA1 } from '../../shared/a1';
 import { modbusManager } from '../modbus/manager';
 import { log as appLog } from '../modbus/logBus';
+import type { HistorianWriter } from '../historian/writer';
 
 // HF >= 2.x requires a license key; "gpl-v3" is the public free option.
 const HF_LICENSE_KEY = 'gpl-v3';
@@ -57,8 +58,28 @@ const UI_BUTTON_FN_NAMES = [
   'UI_BUTTON_PULSE',
 ] as const;
 
+/** Historian capture pseudo-function. */
+const HISTORY_FN_NAME = 'HISTORY_CAPTURE' as const;
+
+/** Valid tag name pattern: alphanumeric, hyphen, underscore, no spaces. */
+const TAG_NAME_RE = /^[A-Za-z0-9_-]+$/;
+
 let modbusPluginRegistered = false;
 let uiButtonPluginRegistered = false;
+let historianPluginRegistered = false;
+
+// Module-level historian writer reference; set when a workbook with a
+// historian opens. Shared across all FormulaHost instances (one per workbook)
+// — the writer's `record()` is safe to call concurrently since it only
+// pushes to a JS array (no async in the hot path).
+let sharedHistorianWriter: HistorianWriter | null = null;
+
+// Module-level tag-conflict registry: tagName -> first cell address that used it.
+// Cleared when the historian writer is swapped (workbook close/re-open).
+const tagOwnerMap = new Map<string, string>();
+
+// Module-level recompute start time used by HISTORY_CAPTURE for timestamps.
+let recomputeStartTime = 0;
 
 /**
  * Modbus addresses arrive from HF as numbers (e.g. 40001) when the user
@@ -295,6 +316,94 @@ function ensureUiButtonPlugin(): void {
   uiButtonPluginRegistered = true;
 }
 
+/**
+ * Register HISTORY_CAPTURE as an HF function stub.
+ * Returns a status string; is volatile so it re-evaluates on every poll tick.
+ */
+function ensureHistorianPlugin(): void {
+  if (historianPluginRegistered) return;
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const hfMod = require('hyperformula') as { FunctionPlugin: any };
+  const Base = hfMod.FunctionPlugin;
+
+  class HistorianPlugin extends Base {
+    historianCapture(_ast: unknown, state: unknown): unknown {
+      return runWithArgs(
+        this as unknown as { runFunction?: (...a: unknown[]) => unknown },
+        _ast, state,
+        (args) => {
+          const tag = args[0] !== undefined && args[0] !== null ? String(args[0]).trim() : '';
+          if (!tag) return 'ERR: tag name required';
+          if (!TAG_NAME_RE.test(tag)) return 'ERR: invalid tag name (use letters, numbers, - or _)';
+
+          // We need a cell address for conflict detection. HF passes a `state`
+          // object with sheet/row/col; extract it defensively.
+          const st = state as { formulaAddress?: { sheet: number; row: number; col: number } } | null;
+          const addr = st?.formulaAddress
+            ? `${st.formulaAddress.sheet}:${st.formulaAddress.row}:${st.formulaAddress.col}`
+            : tag;
+
+          const existingOwner = tagOwnerMap.get(tag);
+          if (existingOwner && existingOwner !== addr) {
+            return 'ERR: tag conflict';
+          }
+          tagOwnerMap.set(tag, addr);
+
+          if (!sharedHistorianWriter) return 'ERR: historian not open';
+
+          const rawValue = args[1] ?? null;
+          const value: number | boolean | null =
+            typeof rawValue === 'number' || typeof rawValue === 'boolean' ? rawValue
+            : rawValue === null ? null
+            : null; // string values from non-numeric cells record as null
+
+          const deadbandArg = args[2];
+          const heartbeatArg = args[3];
+          const deadband = deadbandArg !== null && deadbandArg !== undefined && !Number.isNaN(Number(deadbandArg))
+            ? Number(deadbandArg)
+            : undefined;
+          const heartbeatSec = heartbeatArg !== null && heartbeatArg !== undefined && !Number.isNaN(Number(heartbeatArg))
+            ? Number(heartbeatArg)
+            : undefined;
+
+          // Lazily resolve tagId (creates on first use)
+          void (async () => {
+            if (!sharedHistorianWriter) return;
+            const db = sharedHistorianWriter.activeDB;
+            if (!db) return;
+            const entry = await db.resolveTag(tag);
+            sharedHistorianWriter.record(tag, entry.id, value, recomputeStartTime, deadband, heartbeatSec);
+          })();
+
+          // Synchronous return for HF: show OK with last-write time.
+          // On the very first evaluation this shows the recomputeStartTime.
+          const ts = recomputeStartTime || Date.now();
+          return `OK  ${new Date(ts).toISOString().replace('T', ' ').slice(0, 19)}`;
+        },
+      );
+    }
+  }
+
+  (HistorianPlugin as any).implementedFunctions = {
+    HISTORY_CAPTURE: {
+      method: 'historianCapture',
+      parameters: [
+        { argumentType: 'ANY' },                                          // tag (required)
+        { argumentType: 'ANY' },                                          // value (required)
+        { argumentType: 'ANY', optionalArg: true, defaultValue: null },   // deadband
+        { argumentType: 'ANY', optionalArg: true, defaultValue: null },   // heartbeat_seconds
+      ],
+      isVolatile: true,
+    },
+  };
+
+  HyperFormula.registerFunctionPlugin(HistorianPlugin as any, {
+    enGB: { HISTORY_CAPTURE: HISTORY_FN_NAME },
+    enUS: { HISTORY_CAPTURE: HISTORY_FN_NAME },
+  });
+  historianPluginRegistered = true;
+}
+
 export interface FormulaHost {
   /** Push an edit (raw cell input) and return cells whose displayed value changed. */
   applyEdit(sheetName: string, address: string, raw: string): Array<{ sheet: string; address: string; value: SheetCellValue; errored?: boolean }>;
@@ -304,11 +413,14 @@ export interface FormulaHost {
   syncCachedValues(): void;
   /** Force HF to re-evaluate volatile functions (MODBUS_*) and return changed cells. */
   recomputeVolatile(): Array<{ sheet: string; address: string; value: SheetCellValue; errored?: boolean }>;
+  /** Attach or detach the historian writer used by HISTORY_CAPTURE cells. */
+  setHistorianWriter(writer: HistorianWriter | null): void;
 }
 
 export function createFormulaHost(model: WorkbookModel): FormulaHost {
   ensureModbusPlugin();
   ensureUiButtonPlugin();
+  ensureHistorianPlugin();
 
   // Build sheets-data shaped as HF expects: { sheetName: [[row0col0, row0col1...], ...] }.
   const sheetsData: Record<string, unknown[][]> = {};
@@ -490,6 +602,9 @@ export function createFormulaHost(model: WorkbookModel): FormulaHost {
     },
 
     recomputeVolatile() {
+      // Stamp the recompute time BEFORE rebuilding so HISTORY_CAPTURE cells
+      // all use a consistent timestamp for this poll cycle.
+      recomputeStartTime = Date.now();
       // HF marks MODBUS_* functions as isVolatile, so rebuildAndRecalculate
       // will re-execute them. We diff cached values before/after to surface
       // only the cells whose displayed result changed.
@@ -518,6 +633,12 @@ export function createFormulaHost(model: WorkbookModel): FormulaHost {
         }
       }
       return out;
+    },
+
+    setHistorianWriter(writer: HistorianWriter | null): void {
+      sharedHistorianWriter = writer;
+      // Clear tag-conflict map when historian is re-attached (workbook reload)
+      tagOwnerMap.clear();
     },
   };
 }

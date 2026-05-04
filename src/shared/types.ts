@@ -199,9 +199,21 @@ export interface InterfaceConfig {
   };
 }
 
+export interface HistorianConfig {
+  /** On-change deadband applied to all tags that don't override it. 0 = record every change. */
+  defaultDeadband: number;
+  /** Heartbeat write interval in seconds for all tags that don't override it. */
+  defaultHeartbeatSec: number;
+  /** How often (ms) the in-memory ring buffer is flushed to LevelDB as a batch write. */
+  batchFlushMs: number;
+  /** Number of days of history to retain. Older records are deleted hourly. */
+  retentionDays: number;
+}
+
 export interface AppConfig {
   servers: ServerConfig[];
   interfaces: InterfaceConfig[];
+  historian?: HistorianConfig;
 }
 
 export type LogLevel = 'info' | 'warn' | 'error';

@@ -20,9 +20,10 @@
 import type {
   AppConfig,
   ServerConfig,
+  HistorianConfig,
 } from '@shared/types';
 
-type Tab = 'servers' | 'diagnostics';
+type Tab = 'servers' | 'diagnostics' | 'historian';
 
 export interface SettingsViewCallbacks {
   onConfigChanged?: () => void;
@@ -53,6 +54,7 @@ export class SettingsView {
         <div class="settings-tabs" style="display:flex;gap:0;border-bottom:1px solid var(--border);background:var(--bg-toolbar);">
           ${this.tabBtn('servers', 'Servers')}
           ${this.tabBtn('diagnostics', 'Diagnostics')}
+          ${this.tabBtn('historian', 'Historian')}
           <div style="flex:1"></div>
           <button class="w2ui-btn" data-act="import" style="margin:4px 4px;">Import...</button>
           <button class="w2ui-btn" data-act="export" style="margin:4px 4px;">Export...</button>
@@ -81,6 +83,9 @@ export class SettingsView {
         break;
       case 'diagnostics':
         this.renderDiagnostics(body);
+        break;
+      case 'historian':
+        this.renderHistorian(body);
         break;
     }
   }
@@ -236,6 +241,67 @@ export class SettingsView {
       refresh();
     });
     void refresh();
+  }
+
+  // ---- Historian ----
+
+  private renderHistorian(body: HTMLElement): void {
+    const DEFAULT_HISTORIAN: HistorianConfig = {
+      defaultDeadband: 0,
+      defaultHeartbeatSec: 60,
+      batchFlushMs: 1000,
+      retentionDays: 30,
+    };
+    if (!this.config.historian) {
+      this.config.historian = { ...DEFAULT_HISTORIAN };
+    }
+    const h = this.config.historian;
+
+    body.innerHTML = `
+      <h3 style="margin:0 0 12px;">Historian Settings</h3>
+      <table style="border-collapse:collapse;">
+        <tr>
+          <td style="padding:6px 12px 6px 0;"><label>Default Deadband</label></td>
+          <td style="padding:6px 0;">
+            <input type="number" data-hfield="defaultDeadband" value="${h.defaultDeadband}" min="0" step="0.01"
+              style="width:120px;padding:3px 6px;background:var(--bg);color:var(--fg);border:1px solid var(--border);font-family:inherit;" />
+            <span style="margin-left:6px;font-size:12px;color:var(--fg-muted);">engineering units</span>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:6px 12px 6px 0;"><label>Default Heartbeat</label></td>
+          <td style="padding:6px 0;">
+            <input type="number" data-hfield="defaultHeartbeatSec" value="${h.defaultHeartbeatSec}" min="1" step="1"
+              style="width:120px;padding:3px 6px;background:var(--bg);color:var(--fg);border:1px solid var(--border);font-family:inherit;" />
+            <span style="margin-left:6px;font-size:12px;color:var(--fg-muted);">seconds (max interval between writes)</span>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:6px 12px 6px 0;"><label>Batch Flush Interval</label></td>
+          <td style="padding:6px 0;">
+            <input type="number" data-hfield="batchFlushMs" value="${h.batchFlushMs}" min="100" step="100"
+              style="width:120px;padding:3px 6px;background:var(--bg);color:var(--fg);border:1px solid var(--border);font-family:inherit;" />
+            <span style="margin-left:6px;font-size:12px;color:var(--fg-muted);">ms (how often pending samples are written to disk)</span>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:6px 12px 6px 0;"><label>Retention</label></td>
+          <td style="padding:6px 0;">
+            <input type="number" data-hfield="retentionDays" value="${h.retentionDays}" min="1" step="1"
+              style="width:120px;padding:3px 6px;background:var(--bg);color:var(--fg);border:1px solid var(--border);font-family:inherit;" />
+            <span style="margin-left:6px;font-size:12px;color:var(--fg-muted);">days (older records deleted hourly)</span>
+          </td>
+        </tr>
+      </table>
+    `;
+
+    body.querySelectorAll<HTMLInputElement>('input[data-hfield]').forEach((inp) => {
+      inp.addEventListener('change', () => {
+        const field = inp.dataset.hfield as keyof HistorianConfig;
+        (this.config.historian as unknown as Record<string, unknown>)[field] = Number(inp.value);
+        this.markDirty();
+      });
+    });
   }
 }
 
